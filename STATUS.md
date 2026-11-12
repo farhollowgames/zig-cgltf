@@ -33,9 +33,6 @@ library and translate-c; differential tests over every sample model;
 edge cases; fuzzing; benchmark; docs; step-4 report; then the performance
 pass, the skeptic and the fixes on branch `review/perf-and-skeptic`.
 
-Not pushed: remote missing (`git ls-remote origin` fails until the author
-creates the repository).
-
 ## Parsing
 
 | upstream | zig-cgltf | tests | state |
