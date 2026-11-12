@@ -127,11 +127,12 @@ Time taken by zig-cgltf against cgltf, one thread, over every sample model:
 
 | feature | zig-cgltf vs cgltf |
 | --- | ---: |
-| parse glTF | 33% faster |
-| parse GLB | 13% faster |
+| parse glTF | 24% faster |
+| parse GLB | 10% faster |
 | validate | 10% slower |
-| unpack floats | about 6 times faster |
-| world transforms | 29% slower |
+| unpack floats | about 6.2 times faster |
+| world transforms | 31% slower |
+| write | about 7.1 times faster |
 
 On an AMD Ryzen 9 9950X3D, Linux, Zig 0.17.0 (`x86_64` `znver5`), with cgltf built by Zig's
 clang at `-O3`. [`doc/TESTING.md`](doc/TESTING.md) describes the tests, and

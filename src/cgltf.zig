@@ -1,6 +1,7 @@
-//! A Zig port of cgltf, the glTF 2.0 loader: parse glTF and GLB files,
-//! load their buffers, check them against the glTF rules, and read their
-//! accessors as floats and integers.
+//! A Zig port of cgltf, the glTF 2.0 loader, and of its writer: parse glTF
+//! and GLB files, load their buffers, check them against the glTF rules,
+//! read their accessors as floats and integers, and write them back as
+//! glTF or GLB.
 //!
 //! References between objects are indices into the `Gltf` arrays, so a
 //! `Gltf` can be copied and moved freely. Everything it holds lives in its

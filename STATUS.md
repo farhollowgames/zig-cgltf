@@ -1,5 +1,36 @@
 # Status
 
+## Writer report
+
+Done: `cgltf_write.h` ported on branch `port/writer` (from `review/perf-and-skeptic`), pushed,
+through the port steps: inventory, oracle tests, benchmark, performance pass, skeptic and
+fixes. Release (step 8) waits for the author.
+
+Tests: `zig build test` runs 65, all passing in ReleaseSafe: 16 unit tests, 35 oracle tests
+and 14 tests of refusals, failed allocations and a custom reader. New for the writer: every
+sample model's text, glTF file and GLB file compared byte for byte with cgltf's, the text
+parsed again by both, 3,000 generated documents written and compared, extras on every
+object, a padded BIN chunk, the bytes past the text in a fixed output, two refusals, and
+`formatFloat` against glibc's `%.9g` (220,000 random floats; a probe outside the tests
+compared every positive finite float).
+
+Benchmark, `--rounds 3`: write 7.11 (26.98 ms against cgltf's 191.73 ms); 2.30 before the
+performance pass, whose kept changes are a `%.9g` without u256 division or `log10`, fixed-size
+indent copies, property names as constants and integers without `print`.
+
+Skeptic findings: the indent's fixed-size copy wrote spaces past the text into the caller's
+buffer (fixed, with a test that failed before); the BIN padding and the extras of 16 kinds
+of object were untested (tests added, each failing under a mutation the suite let through);
+`writeFile`'s `IoError` where cgltf returns success, extras whose JSON range holds a NUL
+(cgltf counts the whole range), the C locale and the GLB total on 64-bit big-endian machines
+were undocumented (now in `doc/parity.md`).
+
+Open: the step-4 and step-7 points below; for the writer, whether `writeFile` should return
+success on a failed write as cgltf does (it returns `IoError`), and whether extras with a NUL
+should be refused rather than cut. The build prints a "failed command" line for the
+differential tests on every run that is not cached, because the fuzz tests print their
+counts to stderr; every step succeeds.
+
 ## Step-7 report
 
 Done: steps 5 to 7 on branch `review/perf-and-skeptic`, pushed; `main` holds steps 1 to 4.
@@ -108,7 +139,10 @@ Written to resume from: the next agent reads this section and `git log`.
   `doc/parity.md`: `writeFile`'s `IoError`, extras whose JSON range holds a NUL, the C
   locale, and the GLB total on 64-bit big-endian machines.
 
-Next steps: README and `doc/` for the writer; then the author reviews both branches and the open points,
+- The writer's docs: README, `doc/parity.md`, `doc/TESTING.md`, `doc/BENCHMARKS.md` (a full
+  three-round run at `24a0b1e`), done.
+
+Next steps: the author reviews both branches and the open points,
 and the release: merge, tag `v0.1.0`, and the release notes.
 
 ## Tests

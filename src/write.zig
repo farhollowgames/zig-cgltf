@@ -126,7 +126,9 @@ pub fn write(gltf: *const Gltf, out: *Io.Writer) WriteError!void {
 /// cgltf's `cgltf_write_file`: writes `gltf` to the file at `path`, as
 /// glTF JSON or, for `.glb`, as a GLB with the JSON and `gltf.bin` as its
 /// chunks. The JSON is written twice, once to count its bytes for the GLB
-/// header and once to the file, as cgltf writes it.
+/// header and once to the file, as cgltf writes it. A file that cannot be
+/// created is `error.FileNotFound`, and a failed write `error.IoError`,
+/// where cgltf ignores write failures.
 pub fn writeFile(
     gltf: *const Gltf,
     io: Io,
