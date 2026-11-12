@@ -58,29 +58,63 @@ fn componentReadIndex(bytes: []const u8, component_type: ComponentType) usize {
     };
 }
 
-fn componentReadInteger(bytes: []const u8, component_type: ComponentType) i64 {
+/// The integer type a component is stored as; a float is read as its bits.
+fn Stored(comptime component_type: ComponentType) type {
     return switch (component_type) {
-        .r_16 => readInt(i16, bytes),
-        .r_16u => readInt(u16, bytes),
-        .r_32u => readInt(u32, bytes),
-        .r_8 => @as(i8, @bitCast(bytes[0])),
-        .r_8u => bytes[0],
-        else => 0,
+        .r_8 => i8,
+        .r_8u, .invalid => u8,
+        .r_16 => i16,
+        .r_16u => u16,
+        .r_32u, .r_32f => u32,
     };
 }
 
-fn componentReadFloat(bytes: []const u8, component_type: ComponentType, normalized: bool) f32 {
-    if (component_type == .r_32f) return @bitCast(readInt(u32, bytes));
-    if (normalized) {
-        return switch (component_type) {
-            .r_16 => @as(f32, @floatFromInt(readInt(i16, bytes))) / 32767.0,
-            .r_16u => @as(f32, @floatFromInt(readInt(u16, bytes))) / 65535.0,
-            .r_8 => @as(f32, @floatFromInt(@as(i8, @bitCast(bytes[0])))) / 127.0,
-            .r_8u => @as(f32, @floatFromInt(bytes[0])) / 255.0,
-            else => 0,
-        };
+/// cgltf's `cgltf_component_read_float` of components already read: a
+/// float as it is, a normalized integer scaled to [0, 1] or [-1, 1], 0
+/// for a type it does not read, and any other integer converted.
+fn toFloats(
+    comptime component_type: ComponentType,
+    comptime normalized: bool,
+    comptime lanes: usize,
+    stored: @Vector(lanes, Stored(component_type)),
+) @Vector(lanes, f32) {
+    const Floats = @Vector(lanes, f32);
+    if (component_type == .invalid) return @splat(0);
+    if (component_type == .r_32f) return @bitCast(stored);
+    const floats: Floats = @floatFromInt(stored);
+    if (!normalized) return floats;
+    const scale: f32 = switch (component_type) {
+        .r_16 => 32767,
+        .r_16u => 65535,
+        .r_8 => 127,
+        .r_8u => 255,
+        else => return @splat(0),
+    };
+    return floats / @as(Floats, @splat(scale));
+}
+
+/// One element of type `t` from `bytes`, which hold its whole span, as
+/// cgltf's `cgltf_element_read_float` reads it.
+fn readElementFloats(
+    comptime component_type: ComponentType,
+    comptime normalized: bool,
+    comptime t: types.Type,
+    bytes: []const u8,
+    out: *[cgltf.numComponents(t)]f32,
+) void {
+    const T = Stored(component_type);
+    const n = comptime cgltf.numComponents(t);
+    if (component_type == .invalid) {
+        out.* = @splat(0);
+        return;
     }
-    return @floatFromInt(componentReadInteger(bytes, component_type));
+    const offsets = comptime componentOffsets(t, @sizeOf(T));
+    var stored: @Vector(n, T) = undefined;
+    inline for (0..n) |i| {
+        const at = if (offsets.len > 0) offsets[i] else @sizeOf(T) * i;
+        stored[i] = readInt(T, bytes[at..]);
+    }
+    out.* = toFloats(component_type, normalized, n, stored);
 }
 
 fn componentReadUint(bytes: []const u8, component_type: ComponentType) u32 {
@@ -120,15 +154,28 @@ fn indexSize(component_type: ComponentType) usize {
 }
 
 /// cgltf's `cgltf_element_read_float`, the element at `offset` in `memory`.
-fn elementReadFloat(memory: []const u8, offset: usize, accessor: *const Accessor, out: []f32) ReadError!bool {
+/// Inline, so that a caller's loop over one accessor's elements can choose
+/// the component and element type once, outside the loop.
+inline fn elementReadFloat(
+    memory: []const u8,
+    offset: usize,
+    accessor: *const Accessor,
+    out: []f32,
+) ReadError!bool {
     const num_components = cgltf.numComponents(accessor.type);
     if (out.len < num_components) return false;
     const bytes = try bytesAt(memory, offset, elementSpan(accessor.type, accessor.component_type));
-    const component_size = cgltf.componentSize(accessor.component_type);
-    const offsets = componentOffsets(accessor.type, component_size);
-    for (out[0..num_components], 0..) |*value, i| {
-        const at = if (offsets.len > 0) offsets[i] else component_size * i;
-        value.* = componentReadFloat(bytes[at..], accessor.component_type, accessor.normalized);
+    switch (accessor.component_type) {
+        inline else => |component_type| switch (accessor.type) {
+            inline else => |t| {
+                const dest = out[0..comptime cgltf.numComponents(t)];
+                if (accessor.normalized) {
+                    readElementFloats(component_type, true, t, bytes, dest);
+                } else {
+                    readElementFloats(component_type, false, t, bytes, dest);
+                }
+            },
+        },
     }
     return true;
 }

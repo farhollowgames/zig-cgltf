@@ -58,6 +58,11 @@ Written to resume from: the next agent reads this section and `git log`.
     alphabet: 80.3 to 1.2 ms (ratio 0.81 to 58). A unit test in `load.zig` covers the chunks
     and where a bad character is refused; the oracle's base64 fuzz texts are under 48
     characters, so only the sample models' data URIs reach the chunks there.
+  - read float: `elementReadFloat` is inline and picks the component type, the element
+    type and `normalized` once, each as a compile-time parameter, so a caller's loop over one
+    accessor's elements chooses them outside the loop: read float 264.3 to 172.2 ms (ratio
+    0.81 to 1.15), unpack floats 128.4 to 57.9 ms (0.76 to 1.52). Without `inline` the
+    specialization alone gained nothing on read float (250 to 278 ms over two runs).
 - Steps 6 and 7 (skeptic, fixes): not started.
 
 Next steps, in order: on `review/perf-and-skeptic`, a fresh agent's performance pass (each
