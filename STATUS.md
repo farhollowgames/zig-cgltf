@@ -90,8 +90,10 @@ Written to resume from: the next agent reads this section and `git log`.
 
 - The writer (`cgltf_write.h`), on branch `port/writer` from `review/perf-and-skeptic`, as
   the author asked: ported and oracle-tested (every sample model's text and files, byte for
-  byte; round trips; 3,000 generated documents; `%.9g` against glibc). Not yet done: its
-  benchmark row, the performance pass, the skeptic and the fixes, and the docs.
+  byte; round trips; 3,000 generated documents; `%.9g` against glibc). Benchmarked: the
+  `write` row, every model's text into memory, 84.1 ms against cgltf's 193.8 ms (ratio
+  2.30, three rounds, load average about 25). Not yet done: the performance pass, the
+  skeptic and the fixes, and the docs.
 
 Next steps: the writer's benchmark, a fresh performance pass, a fresh skeptic, the fixes,
 then README, `doc/` and this file; then the author reviews both branches and the open points,
@@ -213,7 +215,7 @@ From `cgltf_write.h`, on branch `port/writer`.
 
 | upstream | zig-cgltf | tests | state |
 | --- | --- | --- | --- |
-| `cgltf_write` into a buffer | `write` to an `std.Io.Writer` | write-samples, write-again, write-fuzz, write-unit | oracle-tested |
+| `cgltf_write` into a buffer | `write` to an `std.Io.Writer` | write-samples, write-again, write-fuzz, write-unit | benchmarked |
 | `cgltf_write` with no buffer (the size) | `write` to an `std.Io.Writer.Discarding` | write-samples, write-refusals | oracle-tested |
 | `cgltf_write_file`, glTF and GLB | `writeFile` | write-files | oracle-tested |
 | every object, extension and extras the writer writes | as upstream | write-samples, write-fuzz | oracle-tested |
