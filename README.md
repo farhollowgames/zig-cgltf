@@ -29,8 +29,10 @@ with AI assistance for Farhollow Games, and is only machine verified. See
 ## Install
 
 ```sh
-zig fetch --save git+https://github.com/farhollowgames/zig-cgltf#v0.1.0
+zig fetch --save git+https://github.com/farhollowgames/zig-cgltf#main
 ```
+
+There is no release yet; this fetches `main`.
 
 In `build.zig`:
 
@@ -102,9 +104,9 @@ Most of the 35 run cgltf and the port on the same inputs (every Khronos sample m
 hand-made edge cases and 7,000 fuzzed files) and compare every field of the result, every
 string byte, every reference as an index, and every float as bits.
 
-Time taken by zig-cgltf against cgltf, one thread, over every sample model:
+Port time against original time, one thread, over every sample model:
 
-| feature | zig-cgltf vs cgltf |
+| feature | port vs original |
 | --- | ---: |
 | parse glTF | 18% faster |
 | parse GLB | 6% faster |
@@ -112,9 +114,13 @@ Time taken by zig-cgltf against cgltf, one thread, over every sample model:
 | unpack floats | 33% slower |
 | world transforms | 47% faster |
 
-On an AMD Ryzen 9 9950X3D, Linux, Zig 0.17.0 (`x86_64` `znver5`), with cgltf built by Zig's
-clang at `-O3`. [`doc/TESTING.md`](doc/TESTING.md) describes the tests, and
-[`doc/BENCHMARKS.md`](doc/BENCHMARKS.md) has every row, the flags and the command.
+AMD Ryzen 9 9950X3D, Linux, Zig 0.17.0 (`x86_64` `znver5`), with cgltf built by Zig's clang
+at `-O3`.
+
+- [`doc/TESTING.md`](doc/TESTING.md): how the tests compare the port with the original, and
+  what this repository's tests cover.
+- [`doc/BENCHMARKS.md`](doc/BENCHMARKS.md): ratios and full tables: every row, the flags on
+  both sides and the command.
 
 ## Licence and references
 
@@ -125,9 +131,12 @@ cgltf's copyright notice:
 
 [`NOTICE`](NOTICE) names the translated sources, jsmn among them.
 
-- cgltf: <https://github.com/jkuhlmann/cgltf>, by Johannes Kuhlmann, tag v1.15
-  (`85cd623`), vendored in `reference/cgltf/` for the tests and the benchmark only.
-- jsmn, the JSON tokenizer cgltf includes: <https://github.com/zserge/jsmn>, by Serge
+- [cgltf](https://github.com/jkuhlmann/cgltf), the original, by
+  [Johannes Kuhlmann](https://github.com/jkuhlmann), tag `v1.15` (`85cd623`), copied into
+  `reference/cgltf/` for the tests and the benchmark only.
+- [jsmn](https://github.com/zserge/jsmn), the JSON tokenizer cgltf includes, by Serge
   Zaitsev.
-- glTF 2.0: <https://registry.khronos.org/glTF/>, and the Khronos sample models at
-  <https://github.com/KhronosGroup/glTF-Sample-Assets>.
+- [glTF 2.0](https://registry.khronos.org/glTF/), the format, and the Khronos
+  [sample models](https://github.com/KhronosGroup/glTF-Sample-Assets).
+
+Made by Farhollow Games for the Loomwork Engine.
