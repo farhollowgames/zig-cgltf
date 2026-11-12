@@ -122,8 +122,8 @@ Nothing: every function of `cgltf.h` and `cgltf_write.h` is ported, and
 
 ## Testing and benchmarks
 
-`zig build test` runs 67 tests: 16 unit tests and 51 tests that build cgltf from `reference/`.
-Most of the 51 run cgltf and the port on the same inputs (every Khronos sample model,
+`zig build test` runs 69 tests: 17 unit tests and 52 tests that build cgltf from `reference/`.
+Most of the 52 run cgltf and the port on the same inputs (every Khronos sample model,
 hand-made edge cases and 13,000 fuzzed files) and compare every field of the result, every
 string byte, every reference as an index, every float as bits, and every byte of the text
 and files written.
@@ -132,11 +132,11 @@ Port time against original time, one thread, over every sample model:
 
 | feature | port vs original |
 | --- | ---: |
-| parse glTF | 24% faster |
-| parse GLB | 10% faster |
-| validate | 10% slower |
-| unpack floats | about 6.2 times faster |
-| world transforms | 31% slower |
+| parse glTF | 26% faster |
+| parse GLB | 7% faster |
+| validate | 9% faster |
+| unpack floats | about 7.1 times faster |
+| world transforms | 15% faster |
 | write | about 7.1 times faster |
 
 AMD Ryzen 9 9950X3D, Linux, Zig 0.17.0 (`x86_64` `znver5`), with cgltf built by Zig's clang

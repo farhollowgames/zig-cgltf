@@ -1,5 +1,17 @@
 # Status
 
+## Release candidate
+
+`release/candidate`, from `main`, merges `review/perf-and-skeptic`, `port/writer` and
+`perf/validate`, in that order. `zig build test` runs 69, all passing in ReleaseSafe: 17 unit
+tests, 36 oracle tests and 16 tests of refusals, failed allocations and a custom reader; fuzz
+seeds 0, 1 and 13 pass. Benchmark, `--rounds 3` (`doc/BENCHMARKS.md`), cgltf's time over the
+port's: parse glTF 1.35, parse GLB 1.08, decode base64 58.7, validate 1.10, unpack floats
+7.12, read float 1.12, read uint 1.42, unpack indices 2.76, read index 1.17, world
+transforms 1.18, write 7.08; no row is under 1.
+
+The release waits for the author's approval of the interface changes in `doc/parity.md`.
+
 ## Performance pass on the slower rows
 
 Done on `port/writer`, pushed, one commit each with its bench before and after: world
@@ -7,13 +19,7 @@ transforms with `@Vector` columns in cgltf's order of float operations (0.77 to 
 `readIndex` choosing the component type once (0.95 to 1.22), and `readUint` choosing the
 element and component type once (0.95 to 1.35), with a new `read uint` bench row. Measured
 row by row with `--filter` and `--rounds 5`, before and after in the same run, at a load of
-30 to 36. `zig build test` runs 67, all passing; the oracle tests are unedited.
-
-Left: `validate` is still slower, 0.91 (5.70 ms against 5.19) in the last run. A profile
-splits the port's time about evenly between `indexBound` and the per-accessor checks
-around it, with no single hot spot; not changed. The results table in
-`doc/BENCHMARKS.md` is from before this pass; a full `--rounds 3` run on a quieter machine
-should replace it.
+30 to 36. `zig build test` ran 67, all passing; the oracle tests are unedited.
 
 ## Writer report
 
@@ -21,7 +27,7 @@ Done: `cgltf_write.h` ported on branch `port/writer` (from `review/perf-and-skep
 through the port steps: inventory, oracle tests, benchmark, performance pass, skeptic and
 fixes. Release (step 8) waits for the author.
 
-Tests: `zig build test` runs 67, all passing in ReleaseSafe: 16 unit tests, 35 oracle tests
+Tests: `zig build test` ran 67, all passing in ReleaseSafe: 16 unit tests, 35 oracle tests
 and 16 tests of refusals, failed allocations and a custom reader. New for the writer: every
 sample model's text, glTF file and GLB file compared byte for byte with cgltf's, the text
 parsed again by both, 3,000 generated documents written and compared, extras on every
@@ -50,6 +56,19 @@ counts the JSON before it creates the file, so a refused write leaves the path u
 Open: the step-4 and step-7 points below. The build prints a "failed command" line for the
 differential tests on every run that is not cached, because the fuzz tests print their
 counts to stderr; every step succeeds.
+## validate pass
+
+On branch `perf/validate`: the validate row, cgltf's time over the port's, goes from 0.91 to
+1.07 (1.10, the median of nine runs). The index bound reads its last bytes, and runs under
+64 bytes, as overlapping vectors; the loop-of-parents check walks once from each node and stops at a node
+already walked from; and `align(8)` places the fields `validate` reads of every accessor and
+node among the first. Tests: 51 on that branch, with a unit test of the index bound and an edge test of
+every graph of parents of up to five nodes.
+
+Picked from `port/writer` (`cde6c5b`, `5d9ed4e`): world transforms as `@Vector` columns
+and `readIndex` choosing the component type once. World transforms goes from 0.77 to 1.18
+and read index from 0.89 to 1.23, the medians of five and seven runs. The 1.19 reported for
+world transforms was `port/writer`'s; `review/perf-and-skeptic` measures 0.77.
 
 ## Step-7 report
 
@@ -183,6 +202,7 @@ The tests the tables name, by short name:
 | accessors | `edges: accessors of every type, component type and layout read as the original's` |
 | sparse | `edges: sparse accessors, with and without a base view, read as the original's` |
 | validation | `edges: validation of views, meshes, nodes and animations gives the original's results` |
+| parents | `edges: every graph of parents of up to five nodes, and larger random ones, loops included, validate as the original's` |
 | buffers | `edges: buffers from data URIs, files and the BIN chunk load as the original's` |
 | files | `edges: files beside the glTF load as the original's` |
 | decoding | the three `decoding:` tests in `test/functions_test.zig` |
@@ -231,7 +251,7 @@ The tests the tables name, by short name:
 | `cgltf_load_buffer_base64` | `loadBufferBase64` | base64, buffers | benchmarked |
 | `cgltf_decode_string` | `decodeString` | decoding, refusals | oracle-tested |
 | `cgltf_decode_uri` | `decodeUri` | decoding, files | oracle-tested |
-| `cgltf_validate` | `validate` | validation, samples, fuzz, refusals | benchmarked |
+| `cgltf_validate` | `validate` | validation, parents, samples, fuzz, refusals | benchmarked |
 | `cgltf_copy_extras_json` (deprecated) | `copyExtrasJson` | samples, strings, refusals | oracle-tested |
 
 ## Accessors, views and nodes

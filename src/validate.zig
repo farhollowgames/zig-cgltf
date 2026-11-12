@@ -37,32 +37,48 @@ fn indexBound(
     };
 }
 
-/// The largest of the native-endian `T`s that fill `bytes`, 0 for none.
+/// The largest of the native-endian `T`s that fill `bytes`, at least one.
 /// Zig 0.17 leaves a loop over a runtime length scalar, so the lanes are
-/// written out: four 64-byte vectors at a time, then one, then the rest.
-/// The vectors load through pointers, since a `@bitCast` of a byte array
-/// to a vector compiles to scalar shifts.
+/// written out: four 64-byte vectors at a time, then one, then the last
+/// 64 bytes, which may overlap what the loops read, as reading a value
+/// twice leaves the largest the same. The vectors load through pointers,
+/// since a `@bitCast` of a byte array to a vector compiles to scalar
+/// shifts.
 fn maxOf(comptime T: type, bytes: []const u8) usize {
     const lanes = 64 / @sizeOf(T);
     const V = @Vector(lanes, T);
     const vector_bytes = lanes * @sizeOf(T);
+    if (bytes.len < vector_bytes) return maxOfShort(T, vector_bytes / 2, bytes);
     var acc: [4]V = @splat(@splat(0));
     var at: usize = 0;
     while (at + 4 * vector_bytes <= bytes.len) : (at += 4 * vector_bytes) {
         inline for (&acc, 0..) |*a, k| {
-            const chunk: *align(1) const V = @ptrCast(bytes[at + k * vector_bytes ..]);
+            const chunk: *align(1) const V = @ptrCast(bytes[at + k * vector_bytes ..][0..vector_bytes]);
             a.* = @max(a.*, chunk.*);
         }
     }
     while (at + vector_bytes <= bytes.len) : (at += vector_bytes) {
-        const chunk: *align(1) const V = @ptrCast(bytes[at..]);
+        const chunk: *align(1) const V = @ptrCast(bytes[at..][0..vector_bytes]);
         acc[0] = @max(acc[0], chunk.*);
     }
-    var bound: T = @reduce(.Max, @max(@max(acc[0], acc[1]), @max(acc[2], acc[3])));
-    while (at < bytes.len) : (at += @sizeOf(T)) {
-        bound = @max(bound, std.mem.readInt(T, bytes[at..][0..@sizeOf(T)], .native));
+    if (at < bytes.len) {
+        const last: *align(1) const V = @ptrCast(bytes[bytes.len - vector_bytes ..][0..vector_bytes]);
+        acc[1] = @max(acc[1], last.*);
     }
-    return bound;
+    return @reduce(.Max, @max(@max(acc[0], acc[1]), @max(acc[2], acc[3])));
+}
+
+/// `maxOf` of fewer than `2 * width` bytes: a vector of `width` bytes at
+/// the start and one at the end, overlapping, cover them, or a narrower
+/// pair does when they are fewer than `width`.
+fn maxOfShort(comptime T: type, comptime width: usize, bytes: []const u8) usize {
+    if (width > @sizeOf(T)) {
+        if (bytes.len < width) return maxOfShort(T, width / 2, bytes);
+    }
+    const V = @Vector(width / @sizeOf(T), T);
+    const first: *align(1) const V = @ptrCast(bytes[0..width]);
+    const last: *align(1) const V = @ptrCast(bytes[bytes.len - width ..][0..width]);
+    return @reduce(.Max, @max(first.*, last.*));
 }
 
 fn isIndexType(component_type: types.ComponentType) bool {
@@ -199,14 +215,25 @@ pub fn validate(gltf: *const Gltf) Error!void {
         }
     }
 
-    // A loop in the parents, found by one step and two steps at a time.
-    for (gltf.nodes) |*node| {
-        var p1 = node.parent;
-        var p2 = if (p1) |p| gltf.nodes[p].parent else null;
-        while (p1 != null and p2 != null) {
-            if (p1.? == p2.?) return error.InvalidGltf;
-            p1 = gltf.nodes[p1.?].parent;
-            p2 = if (gltf.nodes[p2.?].parent) |p| gltf.nodes[p].parent else null;
+    // A loop in the parents. Each node before `i` is known to reach a
+    // root, so a walk up from `i` ends at the first of them it meets.
+    // Otherwise a loop is found as Brent's method finds one: the walk
+    // compares each node with a mark, which moves up to where the walk
+    // is after 1, 2, 4, ... steps.
+    for (gltf.nodes, 0..) |*node, i| {
+        var mark = i;
+        var steps: usize = 0;
+        var steps_to_move: usize = 1;
+        var next = node.parent;
+        while (next) |parent| : (next = gltf.nodes[parent].parent) {
+            if (parent < i) break;
+            if (parent == mark) return error.InvalidGltf;
+            steps += 1;
+            if (steps == steps_to_move) {
+                mark = parent;
+                steps = 0;
+                steps_to_move *= 2;
+            }
         }
     }
 
@@ -237,5 +264,22 @@ pub fn validate(gltf: *const Gltf) Error!void {
 
     for (gltf.variants) |variant| {
         if (variant.name == null) return error.InvalidGltf;
+    }
+}
+
+test "maxOf finds the largest at every position of every length and alignment" {
+    var storage: [64 + 300]u8 align(64) = undefined;
+    inline for (.{ u8, u16, u32 }) |T| {
+        for ([_]usize{ 0, 1, 2, 3, 4, 6, 8, 12, 16, 33, 60, 63 }) |shift| {
+            for (1..300 / @sizeOf(T)) |count| {
+                const bytes = storage[shift..][0 .. count * @sizeOf(T)];
+                const values: []align(1) T = @ptrCast(bytes);
+                for (0..count) |top| {
+                    for (values, 0..) |*v, k| v.* = @intCast(k % 7 + 1);
+                    values[top] = std.math.maxInt(T) - 1;
+                    try std.testing.expectEqual(std.math.maxInt(T) - 1, maxOf(T, bytes));
+                }
+            }
+        }
     }
 }

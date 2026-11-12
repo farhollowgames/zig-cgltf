@@ -45,29 +45,30 @@ zig build bench -- --filter parse          # the rows whose name contains "parse
 
 ## Machine
 
-AMD Ryzen 9 9950X3D, Linux 7.3, Zig 0.17.0 (`x86_64` `znver5`), at commit `24a0b1e` on
-the branch `port/writer`, on 11 November 2026, three rounds (`zig build bench -- --rounds
-3`). Other builds were running: the one-minute load average was 12 to 22 on 32 hardware
-threads, which is why some ranges are wide.
+AMD Ryzen 9 9950X3D, Linux 7.3, Zig 0.17.0 (`x86_64` `znver5`), on the branch
+`release/candidate`, which merges `review/perf-and-skeptic`, `port/writer` and
+`perf/validate`, on 12 November 2026, three rounds (`zig build bench -- --rounds 3`). Other
+builds were running: the one-minute load average was 32 when the run started and 14 when it
+ended, on 32 hardware threads, which is why some ranges are wide.
 
 ## Results
 
 | feature | zig-cgltf ms | range | cgltf ms | range | cgltf / zig-cgltf |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| parse glTF | 65.785 | 4.8% | 86.706 | 13.8% | 1.32 |
-| parse GLB | 34.138 | 2.7% | 38.094 | 5.8% | 1.12 |
-| decode base64 | 1.010 | 4.3% | 61.525 | 2.0% | 60.92 |
-| validate | 5.152 | 8.1% | 4.691 | 11.2% | 0.91 |
-| unpack floats | 12.524 | 22.2% | 77.877 | 18.4% | 6.22 |
-| read float | 177.398 | 78.8% | 196.939 | 11.5% | 1.11 |
-| unpack indices | 4.044 | 3.6% | 10.311 | 6.3% | 2.55 |
-| read index | 48.464 | 3.3% | 42.559 | 18.8% | 0.88 |
-| world transforms | 0.455 | 5.9% | 0.347 | 2.3% | 0.76 |
-| write | 26.980 | 1.4% | 191.725 | 2.9% | 7.11 |
+| parse glTF | 64.542 | 4.8% | 86.845 | 3.2% | 1.35 |
+| parse GLB | 35.898 | 20.0% | 38.797 | 16.8% | 1.08 |
+| decode base64 | 1.024 | 0.9% | 60.149 | 1.8% | 58.72 |
+| validate | 4.283 | 7.8% | 4.703 | 7.2% | 1.10 |
+| unpack floats | 12.302 | 2.2% | 87.608 | 8.3% | 7.12 |
+| read float | 177.262 | 0.7% | 199.345 | 2.3% | 1.12 |
+| read uint | 134.711 | 5.1% | 191.357 | 7.3% | 1.42 |
+| unpack indices | 3.507 | 22.4% | 9.672 | 9.0% | 2.76 |
+| read index | 36.527 | 13.2% | 42.849 | 1.3% | 1.17 |
+| world transforms | 0.292 | 1.1% | 0.346 | 1.0% | 1.18 |
+| write | 26.901 | 1.1% | 190.592 | 1.9% | 7.08 |
 
-Before this run, on the branch `review/perf-and-skeptic` at commit `e0b7e45` and a load of
-about 15, parse glTF gave 1.48, parse GLB 1.14, read float 1.17 and read index 1.00; those
-rows move with the load from run to run.
+The parse rows move most with the load: other runs of the same parser gave parse glTF from
+1.16 to 1.63 and parse GLB from 1.06 to 1.15.
 
 ## Known biases and slower rows
 
@@ -84,24 +85,22 @@ rows move with the load from run to run.
   accessor reads are written with `@Vector`.
 - **decode base64**: the port decodes 64 characters at a time with vectors; cgltf decodes
   one character at a time.
-- **validate**: both sides spend most of the time in the index bound loop, which is now
-  vectorized on both and bound by memory; the row moves between 0.89 and 1.05 from run to
-  run (0.91 in the last). A profile splits the port's time about evenly between the index
-  bound and the per-accessor checks around it.
+- **validate**: most of the time goes to NodePerformanceTest's 10,000 meshes, where both
+  sides read each primitive's few indices and the accessors they check, bound by memory.
+  The port reads an index run's last bytes, and a run under 64 bytes, as overlapping
+  vectors; a walk up the parents stops at a node already walked from; and the fields it
+  reads of every accessor and node are laid out among the first. Over nine runs the row's
+  median went from 0.91 to 1.10 (from 1.05 to 1.12); on a core of the 96 MiB-cache CCD it is
+  about 1.3.
+- **read index** and **read uint**: `readIndex` switches on the component type once and
+  reads a fixed-size integer, and `readUint` chooses the element and component type at
+  compile time, where both switched for the size and again for the read. Read index went
+  from 0.89 to 1.23 over seven runs; read uint from 0.95 to 1.35, measured alone.
+- **world transforms**: the local transform's rotation columns and the parent product are
+  written with `@Vector`, in cgltf's order of float operations, so the bits match. Over five
+  runs on one core the row's median went from 0.77 to 1.18 (from 1.17 to 1.19).
 - **write**: cgltf formats every value with `snprintf`; the port writes property names as
   constants, integers two digits at a time, and floats with its own `%.9g` (`formatFloat`),
   which works from the float's binary exponent with integer multiplies.
-- **world transforms**: the local transform's rotation columns and the parent product are
-  written with `@Vector`, in cgltf's order of float operations, so the bits match.
-- The results table above predates the last performance pass (world transforms, read index,
-  read uint). That pass measured its rows alone, `--filter` and `--rounds 5`, the two sides in
-  one run, at a load of 30 to 36 on 32 hardware threads:
-
-  | feature | before | after |
-  | --- | ---: | ---: |
-  | world transforms | 0.77 | 1.19 |
-  | read index | 0.95, 0.96 | 1.21, 1.23 |
-  | read uint | 0.94, 0.96 | 1.33, 1.38 |
-
 - The sample models are one input set. Files with much larger buffers or many more nodes may
   give other ratios.

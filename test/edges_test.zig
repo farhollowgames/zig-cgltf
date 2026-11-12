@@ -465,6 +465,68 @@ test "edges: validation of views, meshes, nodes and animations gives the origina
     for (cases) |case| try expectSameJson(case);
 }
 
+/// The nodes of a glTF whose node `k` has parent `parents[k]`, none for
+/// `parents.len`, given as the parents' `children`.
+fn nodesWithParents(out: *std.ArrayList(u8), gpa: std.mem.Allocator, parents: []const usize) !void {
+    try out.appendSlice(gpa, ",\"nodes\":[");
+    for (0..parents.len) |p| {
+        if (p > 0) try out.append(gpa, ',');
+        try out.appendSlice(gpa, "{\"children\":[");
+        var first = true;
+        for (parents, 0..) |parent, k| {
+            if (parent != p) continue;
+            if (!first) try out.append(gpa, ',');
+            first = false;
+            try out.print(gpa, "{d}", .{k});
+        }
+        try out.appendSlice(gpa, "]}");
+    }
+    try out.append(gpa, ']');
+}
+
+test "edges: every graph of parents of up to five nodes, and larger random ones, loops included, validate as the original's" {
+    const gpa = testing.allocator;
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(gpa);
+    var parents: [40]usize = undefined;
+    for (1..6) |n| {
+        // Every parent, or none, for each node: (n + 1)^n graphs.
+        @memset(parents[0..n], 0);
+        while (true) {
+            out.clearRetainingCapacity();
+            try nodesWithParents(&out, gpa, parents[0..n]);
+            try expectSameJson(out.items);
+            var k: usize = 0;
+            while (k < n) : (k += 1) {
+                parents[k] += 1;
+                if (parents[k] <= n) break;
+                parents[k] = 0;
+            }
+            if (k == n) break;
+        }
+    }
+    var prng: std.Random.DefaultPrng = .init(0x9a2e47);
+    const random = prng.random();
+    for (0..400) |_| {
+        const n = random.intRangeAtMost(usize, 6, parents.len);
+        // Trees in shuffled order, a few with one loop among their nodes.
+        var order: [parents.len]usize = undefined;
+        for (order[0..n], 0..) |*o, k| o.* = k;
+        random.shuffle(usize, order[0..n]);
+        parents[order[0]] = n;
+        for (1..n) |k| {
+            parents[order[k]] = if (random.uintLessThan(u8, 8) == 0) n else order[random.uintLessThan(usize, k)];
+        }
+        if (random.boolean()) {
+            const k = random.uintLessThan(usize, n);
+            parents[k] = random.uintLessThan(usize, n);
+        }
+        out.clearRetainingCapacity();
+        try nodesWithParents(&out, gpa, parents[0..n]);
+        try expectSameJson(out.items);
+    }
+}
+
 test "edges: buffers from data URIs, files and the BIN chunk load as the original's" {
     const cases = [_][]const u8{
         \\,"buffers":[{"byteLength":4,"uri":"data:;base64,AAEC"}]
