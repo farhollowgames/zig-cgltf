@@ -272,11 +272,10 @@ pub fn readIndex(gltf: *const Gltf, accessor: *const Accessor, index: usize) Rea
     return componentReadIndex(bytes, accessor.component_type);
 }
 
-/// Whether the first `count` elements of `accessor` lie in `memory_len`
-/// bytes from its offset on, with no offset wrapping, so that reading
-/// them needs no check of its own.
-fn elementsFit(memory_len: usize, accessor: *const Accessor, count: usize) bool {
-    const span = elementSpan(accessor.type, accessor.component_type);
+/// Whether `span` bytes of each of the first `count` elements of
+/// `accessor` lie in `memory_len` bytes from its offset on, with no offset
+/// wrapping, so that reading them needs no check of its own.
+fn elementsFit(memory_len: usize, accessor: *const Accessor, count: usize, span: usize) bool {
     const last = std.math.mul(usize, accessor.stride, count -| 1) catch return false;
     const start = std.math.add(usize, accessor.offset, last) catch return false;
     return start <= memory_len and span <= memory_len - start;
@@ -361,10 +360,11 @@ pub fn unpackFloats(gltf: *const Gltf, accessor: *const Accessor, out: []f32) Re
 
     if (accessor.buffer_view) |view| {
         const memory = try bufferViewData(gltf, view) orelse return 0;
+        const span = elementSpan(accessor.type, accessor.component_type);
         if (accessor.component_type == .r_32f and accessor.stride == floats_per_element * 4) {
             const bytes = try bytesAt(memory, accessor.offset, used.len * 4);
             @memcpy(std.mem.sliceAsBytes(used), bytes);
-        } else if (used.len > 0 and elementsFit(memory.len, accessor, element_count)) {
+        } else if (used.len > 0 and elementsFit(memory.len, accessor, element_count, span)) {
             unpackElementFloats(accessor, memory, used);
         } else {
             var offset = accessor.offset;
@@ -439,6 +439,19 @@ pub fn unpackIndices(
         return index_count;
     }
     const size = indexSize(accessor.component_type);
+    if (size > 0 and index_count > 0 and elementsFit(memory.len, accessor, index_count, size)) {
+        switch (accessor.component_type) {
+            inline .r_8u, .r_16u, .r_32u => |component_type| {
+                const S = Stored(component_type);
+                // Wider indices than `T` returned 0 above.
+                if (@sizeOf(S) > @sizeOf(T)) unreachable;
+                unpackIndicesAs(T, S, memory, accessor, out[0..index_count]);
+            },
+            // `indexSize` is 0 for every other type.
+            else => unreachable,
+        }
+        return index_count;
+    }
     var offset = accessor.offset;
     for (out[0..index_count]) |*value| {
         const bytes = try bytesAt(memory, offset, size);
@@ -446,4 +459,29 @@ pub fn unpackIndices(
         offset +%= accessor.stride;
     }
     return index_count;
+}
+
+/// The indices that fill `out`, stored as `S`, from `memory`, where
+/// `elementsFit` has checked they lie.
+fn unpackIndicesAs(
+    comptime T: type,
+    comptime S: type,
+    memory: []const u8,
+    accessor: *const Accessor,
+    out: []T,
+) void {
+    var offset = accessor.offset;
+    var i: usize = 0;
+    if (accessor.stride == @sizeOf(S)) {
+        const lanes = 16;
+        while (i + lanes <= out.len) : (i += lanes) {
+            const stored: *align(1) const @Vector(lanes, S) = @ptrCast(memory[offset..]);
+            out[i..][0..lanes].* = @as(@Vector(lanes, T), stored.*);
+            offset += lanes * @sizeOf(S);
+        }
+    }
+    while (i < out.len) : (i += 1) {
+        out[i] = readInt(S, memory[offset..]);
+        offset +%= accessor.stride;
+    }
 }

@@ -68,6 +68,8 @@ Written to resume from: the next agent reads this section and `git log`.
     size, no matrix padding) convert 16 at a time as vectors. When the check fails, the
     checked loop runs as before and refuses where it did. 57.9 to 15.6 ms (ratio 1.52 to
     5.96).
+  - unpack indices: the same single check, then unchecked reads, with packed indices
+    widened 16 at a time as vectors: 14.4 to 4.5 ms (ratio 0.75 to 2.68).
 - Steps 6 and 7 (skeptic, fixes): not started.
 
 Next steps, in order: on `review/perf-and-skeptic`, a fresh agent's performance pass (each
