@@ -92,11 +92,18 @@ Written to resume from: the next agent reads this section and `git log`.
   the author asked: ported and oracle-tested (every sample model's text and files, byte for
   byte; round trips; 3,000 generated documents; `%.9g` against glibc). Benchmarked: the
   `write` row, every model's text into memory, 84.1 ms against cgltf's 193.8 ms (ratio
-  2.30, three rounds, load average about 25). Not yet done: the performance pass, the
-  skeptic and the fixes, and the docs.
+  2.30, three rounds, load average about 25) before the performance pass, 28.8 ms against
+  194.0 ms (ratio 6.75) after it.
+- The writer's performance pass (step 5), each change measured with `--rounds 3` under
+  load. Kept: `formatFloat` without a u256 division or `log10` (ratio 2.43 to 5.11; checked
+  against glibc over every positive finite float as well), each indent as one fixed-size
+  copy (to 5.80), comptime property names written as literals (to 5.95 to 6.18), and
+  integers and string values without `print` (to 6.79 to 6.98). Dropped, with no clear
+  gain: formatting floats straight into the writer's buffer, and `formatFloat`'s digits
+  in pairs with a vector scan for the trailing zeros. Not yet done: the skeptic and the
+  fixes, and the docs.
 
-Next steps: the writer's benchmark, a fresh performance pass, a fresh skeptic, the fixes,
-then README, `doc/` and this file; then the author reviews both branches and the open points,
+Next steps: a fresh skeptic for the writer, the fixes, then README, `doc/` and this file; then the author reviews both branches and the open points,
 and the release: merge, tag `v0.1.0`, and the release notes.
 
 ## Tests
