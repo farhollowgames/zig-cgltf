@@ -104,24 +104,26 @@ pub fn build(b: *std.Build) void {
     bench_step.dependOn(&b.addInstallArtifact(bench, .{}).step);
 }
 
-/// cgltf.h as Zig declarations, for the tests to call the original.
+/// cgltf.h and cgltf_write.h as Zig declarations, for the tests to call the
+/// original.
 fn upstreamHeader(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
     optimize: std.lang.Optimize,
 ) *std.Build.Module {
     const translate = b.addTranslateC(.{
-        .root_source_file = b.path("reference/cgltf/cgltf.h"),
+        .root_source_file = b.path("reference/shim/reference.h"),
         .target = target,
         .optimize = optimize,
     });
+    translate.addIncludePath(b.path("reference/cgltf"));
     return translate.createModule();
 }
 
-/// The original as a static library: cgltf.h with its implementation,
-/// at -O3 (Zig's ReleaseFast gives C -O2), linked with the C library
-/// whose atoi, atoll and atof it reads numbers with. Fused multiply-adds
-/// are off so its floats round as written, as Zig's do.
+/// The original as a static library: cgltf.h and cgltf_write.h with their
+/// implementations, at -O3 (Zig's ReleaseFast gives C -O2), linked with the
+/// C library whose atoi, atoll, atof and snprintf it converts numbers with.
+/// Fused multiply-adds are off so its floats round as written, as Zig's do.
 fn upstreamLibrary(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
@@ -137,8 +139,8 @@ fn upstreamLibrary(
         }),
     });
     library.root_module.addIncludePath(b.path("reference/cgltf"));
-    library.root_module.addCSourceFile(.{
-        .file = b.path("reference/shim/cgltf.c"),
+    library.root_module.addCSourceFiles(.{
+        .files = &.{ "reference/shim/cgltf.c", "reference/shim/cgltf_write.c" },
         .flags = &.{ "-O3", "-std=c99", "-ffp-contract=off", "-fno-fast-math" },
     });
     return library;

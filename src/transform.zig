@@ -10,35 +10,49 @@ const types = @import("types.zig");
 /// one, else translation, rotation and scale combined, in cgltf's order
 /// of float operations.
 pub fn transformLocal(node: *const types.Node) [16]f32 {
-    if (node.has_matrix) return node.matrix;
-    const tx = node.translation[0];
-    const ty = node.translation[1];
-    const tz = node.translation[2];
-    const qx = node.rotation[0];
-    const qy = node.rotation[1];
-    const qz = node.rotation[2];
-    const qw = node.rotation[3];
-    const sx = node.scale[0];
-    const sy = node.scale[1];
-    const sz = node.scale[2];
+    return @bitCast(columnsLocal(node));
+}
+
+const V = @Vector(4, f32);
+
+/// `transformLocal` as four columns. Each rotation value is cgltf's
+/// `first - a * b - c * d` or `a * b +- c * d`, computed here as
+/// `(first + sign * a * b) + sign * c * d` with `-0.0` as the first of
+/// the two-term values, which gives the same bits: negation and adding
+/// `-0.0` are exact.
+fn columnsLocal(node: *const types.Node) [4]V {
+    if (node.has_matrix) return @bitCast(node.matrix);
+    const q: V = node.rotation;
+    const q2 = q * @as(V, @splat(2));
+    const s = node.scale;
+    const z = -0.0;
+    const c0 = rotationColumn(q2, q, .{ 1, z, z, 0 }, .{ 1, 0, 0, 0 }, .{ 1, 1, 2, 0 }, .{ -1, 1, 1, 0 }, .{ 2, 2, 1, 0 }, .{ 2, 3, 3, 0 }, .{ -1, 1, -1, 0 });
+    const c1 = rotationColumn(q2, q, .{ z, 1, z, 0 }, .{ 0, 0, 1, 0 }, .{ 1, 0, 2, 0 }, .{ 1, -1, 1, 0 }, .{ 2, 2, 0, 0 }, .{ 3, 2, 3, 0 }, .{ -1, -1, 1, 0 });
+    const c2 = rotationColumn(q2, q, .{ z, z, 1, 0 }, .{ 0, 1, 0, 0 }, .{ 2, 2, 0, 0 }, .{ 1, 1, -1, 0 }, .{ 1, 0, 1, 0 }, .{ 3, 3, 1, 0 }, .{ 1, -1, -1, 0 });
+    const rows: @Vector(4, bool) = .{ true, true, true, false };
+    const zero: V = @splat(0);
     return .{
-        (1 - 2 * qy * qy - 2 * qz * qz) * sx,
-        (2 * qx * qy + 2 * qz * qw) * sx,
-        (2 * qx * qz - 2 * qy * qw) * sx,
-        0,
-        (2 * qx * qy - 2 * qz * qw) * sy,
-        (1 - 2 * qx * qx - 2 * qz * qz) * sy,
-        (2 * qy * qz + 2 * qx * qw) * sy,
-        0,
-        (2 * qx * qz + 2 * qy * qw) * sz,
-        (2 * qy * qz - 2 * qx * qw) * sz,
-        (1 - 2 * qx * qx - 2 * qy * qy) * sz,
-        0,
-        tx,
-        ty,
-        tz,
-        1,
+        @select(f32, rows, c0 * @as(V, @splat(s[0])), zero),
+        @select(f32, rows, c1 * @as(V, @splat(s[1])), zero),
+        @select(f32, rows, c2 * @as(V, @splat(s[2])), zero),
+        .{ node.translation[0], node.translation[1], node.translation[2], 1 },
     };
+}
+
+inline fn rotationColumn(
+    q2: V,
+    q: V,
+    first: V,
+    comptime a: @Vector(4, i32),
+    comptime b: @Vector(4, i32),
+    sign_ab: V,
+    comptime c: @Vector(4, i32),
+    comptime d: @Vector(4, i32),
+    sign_cd: V,
+) V {
+    const ab = @shuffle(f32, q2, undefined, a) * @shuffle(f32, q, undefined, b);
+    const cd = @shuffle(f32, q2, undefined, c) * @shuffle(f32, q, undefined, d);
+    return (first + sign_ab * ab) + sign_cd * cd;
 }
 
 /// cgltf's `cgltf_node_transform_world`: node `node_index`'s local
@@ -46,24 +60,22 @@ pub fn transformLocal(node: *const types.Node) [16]f32 {
 /// where cgltf never returns, is `error.ParentCycle`; `validate` refuses
 /// such files.
 pub fn transformWorld(gltf: *const cgltf.Gltf, node_index: u32) error{ParentCycle}![16]f32 {
-    var lm = transformLocal(&gltf.nodes[node_index]);
+    // cgltf multiplies only the first three rows; each column's fourth
+    // value is kept as the local transform has it.
+    const rows: @Vector(4, bool) = .{ true, true, true, false };
+    var lm = columnsLocal(&gltf.nodes[node_index]);
     var parent = gltf.nodes[node_index].parent;
     var steps: usize = 0;
     while (parent) |p| : (parent = gltf.nodes[p].parent) {
         steps += 1;
         if (steps > gltf.nodes.len) return error.ParentCycle;
-        const pm = transformLocal(&gltf.nodes[p]);
-        for (0..4) |i| {
-            const l0 = lm[i * 4 + 0];
-            const l1 = lm[i * 4 + 1];
-            const l2 = lm[i * 4 + 2];
-            lm[i * 4 + 0] = l0 * pm[0] + l1 * pm[4] + l2 * pm[8];
-            lm[i * 4 + 1] = l0 * pm[1] + l1 * pm[5] + l2 * pm[9];
-            lm[i * 4 + 2] = l0 * pm[2] + l1 * pm[6] + l2 * pm[10];
+        const pm = columnsLocal(&gltf.nodes[p]);
+        inline for (&lm, 0..) |*column, i| {
+            const l = column.*;
+            var r = @as(V, @splat(l[0])) * pm[0] + @as(V, @splat(l[1])) * pm[1] + @as(V, @splat(l[2])) * pm[2];
+            if (i == 3) r += pm[3];
+            column.* = @select(f32, rows, r, l);
         }
-        lm[12] += pm[12];
-        lm[13] += pm[13];
-        lm[14] += pm[14];
     }
-    return lm;
+    return @bitCast(lm);
 }

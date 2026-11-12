@@ -31,9 +31,11 @@ The rows:
 | validate | `validate` of every model, parsed and loaded beforehand |
 | unpack floats | `unpackFloats` of every accessor |
 | read float | `readFloat` of every element of every accessor, into 16 floats |
+| read uint | `readUint` of every element of every accessor, into 4 integers |
 | unpack indices | `unpackIndices` into `u32` of every scalar, unsigned, non-sparse accessor |
 | read index | `readIndex` of every element of those accessors |
 | world transforms | `transformWorld` of every node |
+| write | `write` of every model's text into memory: the port into an `std.Io.Writer.fixed`, cgltf with `cgltf_write` into a buffer of the same size |
 
 ```sh
 zig build bench
@@ -43,24 +45,29 @@ zig build bench -- --filter parse          # the rows whose name contains "parse
 
 ## Machine
 
-AMD Ryzen 9 9950X3D, Linux 7.3, Zig 0.17.0 (`x86_64` `znver5`), at commit `e0b7e45`, on
-11 November 2026, three rounds (`zig build bench -- --rounds 3`). Other builds were running:
-the one-minute load average was about 15 on 32 hardware threads, which is why some ranges
-are wide.
+AMD Ryzen 9 9950X3D, Linux 7.3, Zig 0.17.0 (`x86_64` `znver5`), at commit `24a0b1e` on
+the branch `port/writer`, on 11 November 2026, three rounds (`zig build bench -- --rounds
+3`). Other builds were running: the one-minute load average was 12 to 22 on 32 hardware
+threads, which is why some ranges are wide.
 
 ## Results
 
 | feature | zig-cgltf ms | range | cgltf ms | range | cgltf / zig-cgltf |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| parse glTF | 61.256 | 11.4% | 90.821 | 11.7% | 1.48 |
-| parse GLB | 35.492 | 10.7% | 40.611 | 16.4% | 1.14 |
-| decode base64 | 1.025 | 1.3% | 68.456 | 1.2% | 66.78 |
-| validate | 5.189 | 11.2% | 4.713 | 12.6% | 0.91 |
-| unpack floats | 13.651 | 51.6% | 85.569 | 13.2% | 6.27 |
-| read float | 179.928 | 5.3% | 210.123 | 9.7% | 1.17 |
-| unpack indices | 4.002 | 36.6% | 10.318 | 3.7% | 2.58 |
-| read index | 48.278 | 39.4% | 48.274 | 12.1% | 1.00 |
-| world transforms | 0.453 | 2.0% | 0.350 | 2.6% | 0.77 |
+| parse glTF | 65.785 | 4.8% | 86.706 | 13.8% | 1.32 |
+| parse GLB | 34.138 | 2.7% | 38.094 | 5.8% | 1.12 |
+| decode base64 | 1.010 | 4.3% | 61.525 | 2.0% | 60.92 |
+| validate | 5.152 | 8.1% | 4.691 | 11.2% | 0.91 |
+| unpack floats | 12.524 | 22.2% | 77.877 | 18.4% | 6.22 |
+| read float | 177.398 | 78.8% | 196.939 | 11.5% | 1.11 |
+| unpack indices | 4.044 | 3.6% | 10.311 | 6.3% | 2.55 |
+| read index | 48.464 | 3.3% | 42.559 | 18.8% | 0.88 |
+| world transforms | 0.455 | 5.9% | 0.347 | 2.3% | 0.76 |
+| write | 26.980 | 1.4% | 191.725 | 2.9% | 7.11 |
+
+Before this run, on the branch `review/perf-and-skeptic` at commit `e0b7e45` and a load of
+about 15, parse glTF gave 1.48, parse GLB 1.14, read float 1.17 and read index 1.00; those
+rows move with the load from run to run.
 
 ## Known biases and slower rows
 
@@ -79,8 +86,22 @@ are wide.
   one character at a time.
 - **validate**: both sides spend most of the time in the index bound loop, which is now
   vectorized on both and bound by memory; the row moves between 0.89 and 1.05 from run to
-  run.
-- **world transforms**: 29% slower, not yet looked into; the row takes under half a
-  millisecond over all 339 models.
+  run (0.91 in the last). A profile splits the port's time about evenly between the index
+  bound and the per-accessor checks around it.
+- **write**: cgltf formats every value with `snprintf`; the port writes property names as
+  constants, integers two digits at a time, and floats with its own `%.9g` (`formatFloat`),
+  which works from the float's binary exponent with integer multiplies.
+- **world transforms**: the local transform's rotation columns and the parent product are
+  written with `@Vector`, in cgltf's order of float operations, so the bits match.
+- The results table above predates the last performance pass (world transforms, read index,
+  read uint). That pass measured its rows alone, `--filter` and `--rounds 5`, the two sides in
+  one run, at a load of 30 to 36 on 32 hardware threads:
+
+  | feature | before | after |
+  | --- | ---: | ---: |
+  | world transforms | 0.77 | 1.19 |
+  | read index | 0.95, 0.96 | 1.21, 1.23 |
+  | read uint | 0.94, 0.96 | 1.33, 1.38 |
+
 - The sample models are one input set. Files with much larger buffers or many more nodes may
   give other ratios.

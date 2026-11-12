@@ -1,6 +1,7 @@
-//! A Zig port of cgltf, the glTF 2.0 loader: parse glTF and GLB files,
-//! load their buffers, check them against the glTF rules, and read their
-//! accessors as floats and integers.
+//! A Zig port of cgltf, the glTF 2.0 loader, and of its writer: parse glTF
+//! and GLB files, load their buffers, check them against the glTF rules,
+//! read their accessors as floats and integers, and write them back as
+//! glTF or GLB.
 //!
 //! References between objects are indices into the `Gltf` arrays, so a
 //! `Gltf` can be copied and moved freely. Everything it holds lives in its
@@ -16,6 +17,7 @@ const load = @import("load.zig");
 const check = @import("validate.zig");
 const accessor = @import("accessor.zig");
 const transform = @import("transform.zig");
+const write_json = @import("write.zig");
 
 /// The C library's `atoi`, `atoll` and `atof` as glibc reads text in the C
 /// locale, which cgltf reads every JSON number with.
@@ -100,6 +102,10 @@ pub const bufferViewData = accessor.bufferViewData;
 pub const findAccessor = accessor.findAccessor;
 pub const transformLocal = transform.transformLocal;
 pub const transformWorld = transform.transformWorld;
+pub const WriteError = write_json.WriteError;
+pub const WriteFileError = write_json.WriteFileError;
+pub const write = write_json.write;
+pub const writeFile = write_json.writeFile;
 
 /// cgltf's results other than success, and the port's own refusals.
 pub const Error = error{
@@ -336,6 +342,7 @@ test {
     _ = check;
     _ = accessor;
     _ = transform;
+    _ = write_json;
 }
 
 const testing = std.testing;

@@ -9,6 +9,8 @@ const test_options = @import("test_options");
 const oracle = @import("oracle.zig");
 const samples = @import("samples.zig");
 const fuzz = @import("fuzz.zig");
+const write_test = @import("write_test.zig");
+const c = @import("c");
 
 const testing = std.testing;
 const Allocator = std.mem.Allocator;
@@ -151,12 +153,12 @@ test "fuzz: mutated sample models, GLB containers and upstream's corpus give the
     Context.tally = .{};
     try fuzz.run("mutations", 3000, struct {
         fn case(random: std.Random) !void {
-            const c = Context.current;
-            const seed = c.seeds.items[random.uintLessThan(usize, c.seeds.items.len)];
+            const current = Context.current;
+            const seed = current.seeds.items[random.uintLessThan(usize, current.seeds.items.len)];
             var bytes: std.ArrayList(u8) = .empty;
             defer bytes.deinit(testing.allocator);
             try bytes.appendSlice(testing.allocator, seed.bytes);
-            try mutate(testing.allocator, random, c, &bytes);
+            try mutate(testing.allocator, random, current, &bytes);
             const options: oracle.Options = .{
                 .file_type = switch (random.uintLessThan(u8, 8)) {
                     0 => .gltf,
@@ -783,4 +785,32 @@ test "fuzz: random accessor layouts over one buffer give the original's results"
         }
     }.case);
     if (test_options.fuzz_replay == null) try Context.tally.expectReach("layouts", 50);
+}
+
+test "fuzz: random glTF documents write as the original writes them, and parse again" {
+    const Context = struct {
+        var written: usize = 0;
+    };
+    Context.written = 0;
+    try fuzz.run("written documents", 3000, struct {
+        fn case(random: std.Random) !void {
+            const gpa = testing.allocator;
+            var w: Writer = .{ .gpa = gpa, .random = random, .strict = random.boolean() };
+            defer w.out.deinit(gpa);
+            try w.document();
+            const json = w.out.items;
+            var options = std.mem.zeroes(c.cgltf_options);
+            var original: [*c]c.cgltf_data = null;
+            const result = c.cgltf_parse(&options, json.ptr, json.len, &original);
+            defer if (original != null) c.cgltf_free(original);
+            var port = cgltf.parse(gpa, json, .{}) catch return;
+            defer port.deinit();
+            try testing.expect(result == c.cgltf_result_success);
+            const text = try write_test.expectSameText(gpa, original, &port);
+            defer gpa.free(text);
+            _ = try oracle.expectSame(gpa, testing.io, .{ .bytes = .{ .data = text } }, .{});
+            Context.written += 1;
+        }
+    }.case);
+    if (test_options.fuzz_replay == null) try testing.expect(Context.written >= 1000);
 }

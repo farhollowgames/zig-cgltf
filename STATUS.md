@@ -1,5 +1,56 @@
 # Status
 
+## Performance pass on the slower rows
+
+Done on `port/writer`, pushed, one commit each with its bench before and after: world
+transforms with `@Vector` columns in cgltf's order of float operations (0.77 to 1.19),
+`readIndex` choosing the component type once (0.95 to 1.22), and `readUint` choosing the
+element and component type once (0.95 to 1.35), with a new `read uint` bench row. Measured
+row by row with `--filter` and `--rounds 5`, before and after in the same run, at a load of
+30 to 36. `zig build test` runs 67, all passing; the oracle tests are unedited.
+
+Left: `validate` is still slower, 0.91 (5.70 ms against 5.19) in the last run. A profile
+splits the port's time about evenly between `indexBound` and the per-accessor checks
+around it, with no single hot spot; not changed. The results table in
+`doc/BENCHMARKS.md` is from before this pass; a full `--rounds 3` run on a quieter machine
+should replace it.
+
+## Writer report
+
+Done: `cgltf_write.h` ported on branch `port/writer` (from `review/perf-and-skeptic`), pushed,
+through the port steps: inventory, oracle tests, benchmark, performance pass, skeptic and
+fixes. Release (step 8) waits for the author.
+
+Tests: `zig build test` runs 67, all passing in ReleaseSafe: 16 unit tests, 35 oracle tests
+and 16 tests of refusals, failed allocations and a custom reader. New for the writer: every
+sample model's text, glTF file and GLB file compared byte for byte with cgltf's, the text
+parsed again by both, 3,000 generated documents written and compared, extras on every
+object, a padded BIN chunk, the bytes past the text in a fixed output, four refusals, and
+`formatFloat` against glibc's `%.9g` (220,000 random floats; a probe outside the tests
+compared every positive finite float).
+
+Benchmark, `--rounds 3`: write 7.11 (26.98 ms against cgltf's 191.73 ms); 2.30 before the
+performance pass, whose kept changes are a `%.9g` without u256 division or `log10`, fixed-size
+indent copies, property names as constants and integers without `print`.
+
+Skeptic findings: the indent's fixed-size copy wrote spaces past the text into the caller's
+buffer (fixed, with a test that failed before); the BIN padding and the extras of 16 kinds
+of object were untested (tests added, each failing under a mutation the suite let through);
+`writeFile`'s `IoError` where cgltf returns success, the C locale and the GLB total on 64-bit
+big-endian machines were undocumented (now in `doc/parity.md`). Extras whose JSON range holds
+a NUL, which cgltf cuts at the NUL while counting the whole range, were cut by the port too.
+
+The author's answers: `writeFile` keeps returning `IoError` on a failed write, documented as a
+deliberate difference; extras whose JSON holds a NUL are refused with `error.InvalidExtras`
+(test `refusal: writing extras whose JSON holds a NUL`, failing first), and so are extras
+whose `data` holds one (test `refusal: writing extras whose data holds a NUL`, failing
+first), since cgltf's `%s` cuts them there too; `writeFile` now
+counts the JSON before it creates the file, so a refused write leaves the path untouched.
+
+Open: the step-4 and step-7 points below. The build prints a "failed command" line for the
+differential tests on every run that is not cached, because the fuzz tests print their
+counts to stderr; every step succeeds.
+
 ## Step-7 report
 
 Done: steps 5 to 7 on branch `review/perf-and-skeptic`, pushed; `main` holds steps 1 to 4.
@@ -88,8 +139,31 @@ Written to resume from: the next agent reads this section and `git log`.
 - Step 8 (release): not started; it waits for the author's approval of the left-out list
   and the review of the branch.
 
-Next steps: the author reviews `review/perf-and-skeptic` and the open points; then merge,
-tag `v0.1.0`, and the release notes.
+- The writer (`cgltf_write.h`), on branch `port/writer` from `review/perf-and-skeptic`, as
+  the author asked: ported and oracle-tested (every sample model's text and files, byte for
+  byte; round trips; 3,000 generated documents; `%.9g` against glibc). Benchmarked: the
+  `write` row, every model's text into memory, 84.1 ms against cgltf's 193.8 ms (ratio
+  2.30, three rounds, load average about 25) before the performance pass, 28.8 ms against
+  194.0 ms (ratio 6.75) after it.
+- The writer's performance pass (step 5), each change measured with `--rounds 3` under
+  load. Kept: `formatFloat` without a u256 division or `log10` (ratio 2.43 to 5.11; checked
+  against glibc over every positive finite float as well), each indent as one fixed-size
+  copy (to 5.80), comptime property names written as literals (to 5.95 to 6.18), and
+  integers and string values without `print` (to 6.79 to 6.98). Dropped, with no clear
+  gain: formatting floats straight into the writer's buffer, and `formatFloat`'s digits
+  in pairs with a vector scan for the trailing zeros.
+- The writer's skeptic (step 6) and fixes (step 7): the indent's fixed-size copy wrote spaces
+  past the text into the caller's buffer, where cgltf leaves it alone; each length now has
+  its own fixed-size copy (write row 6.91 after it). Tests added for a BIN chunk that needs
+  padding and for extras on every object, both gaps that let mutations pass. Documented in
+  `doc/parity.md`: `writeFile`'s `IoError`, extras whose JSON range holds a NUL, the C
+  locale, and the GLB total on 64-bit big-endian machines.
+
+- The writer's docs: README, `doc/parity.md`, `doc/TESTING.md`, `doc/BENCHMARKS.md` (a full
+  three-round run at `24a0b1e`), done.
+
+Next steps: the author reviews both branches and the open points,
+and the release: merge, tag `v0.1.0`, and the release notes.
 
 ## Tests
 
@@ -119,6 +193,16 @@ The tests the tables name, by short name:
 | refusals | the `refusal:` tests in `test/refusals_test.zig` |
 | allocation | `a failed allocation at any point of parsing and loading a model leaks nothing` |
 | reader | `a file reader of the caller's reads the file and the buffers, and releases them` |
+| write-samples | `write: every sample model writes as the original writes it` |
+| write-again | `write: every sample model's text parses again in both, as the original's` |
+| write-files | `write: files of every sample model, as glTF and GLB, are the original's`, and `write: a file that cannot be created is not found, as the original's` |
+| write-glb | `write: a GLB whose BIN chunk needs padding is the original's` |
+| write-extras | `write: extras on every object write as the original writes them` |
+| write-output | `write: the output's bytes past the text are left as the original leaves them` |
+| write-fuzz | `fuzz: random glTF documents write as the original writes them, and parse again` |
+| write-refusals | the four `refusal: writing` tests |
+| write-unit | the unit tests in `src/write.zig` |
+| floats | the two `numbers:` tests of `%.9g`, and `formatFloat prints nine significant digits as glibc's %.9g` |
 
 ## Parsing
 
@@ -194,11 +278,21 @@ Each is read into the fields cgltf reads it into.
 | `EXT_mesh_gpu_instancing` | extensions, samples, fuzz | oracle-tested |
 | `EXT_texture_webp` | extensions, samples, fuzz | oracle-tested |
 
+## Writing
+
+From `cgltf_write.h`, on branch `port/writer`.
+
+| upstream | zig-cgltf | tests | state |
+| --- | --- | --- | --- |
+| `cgltf_write` into a buffer | `write` to an `std.Io.Writer` | write-samples, write-again, write-fuzz, write-output, write-unit | benchmarked |
+| `cgltf_write` with no buffer (the size) | `write` to an `std.Io.Writer.Discarding` | write-samples, write-refusals | oracle-tested |
+| `cgltf_write_file`, glTF and GLB | `writeFile` | write-files, write-glb, write-refusals | oracle-tested |
+| every object, extension and extras the writer writes | as upstream | write-samples, write-fuzz, write-extras | oracle-tested |
+| `%.9g` through `snprintf` | `number.formatFloat` | floats | oracle-tested |
+
 ## Left out
 
-Awaiting the author's approval:
-
-- `cgltf_write.h`, the glTF writer, a separate header: Loomwork only reads glTF.
+Nothing: `cgltf_write.h` is ported, as the author asked.
 
 ## Not in cgltf
 

@@ -1278,7 +1278,7 @@ const Parser = struct {
 
     fn skin(p: Parser, start: usize, out: *types.Skin) Fail!usize {
         try p.checkType(start, .object);
-        var seen: struct { joints: bool = false, extensions: bool = false } = .{};
+        var seen: struct { extensions: bool = false } = .{};
         const size = p.tokens[start].size;
         var i = start + 1;
         var j: i32 = 0;
@@ -1287,8 +1287,8 @@ const Parser = struct {
             if (p.is(i, "name")) {
                 i = try p.string(i + 1, &out.name);
             } else if (p.is(i, "joints")) {
-                i = try p.array(i + 1, u32, &out.joints, &seen.joints);
-                i = p.refs(i, out.joints);
+                i = try p.optionalArray(i + 1, u32, &out.joints);
+                i = p.refs(i, out.joints.?);
             } else if (p.is(i, "skeleton")) {
                 try p.checkType(i + 1, .primitive);
                 out.skeleton = p.ref(i + 1);
@@ -1427,7 +1427,6 @@ const Parser = struct {
         out.matrix[10] = 1.0;
         out.matrix[15] = 1.0;
         var seen: struct {
-            children: bool = false,
             extensions: bool = false,
             instancing_attributes: bool = false,
         } = .{};
@@ -1439,8 +1438,8 @@ const Parser = struct {
             if (p.is(i, "name")) {
                 i = try p.string(i + 1, &out.name);
             } else if (p.is(i, "children")) {
-                i = try p.array(i + 1, u32, &out.children, &seen.children);
-                i = p.refs(i, out.children);
+                i = try p.optionalArray(i + 1, u32, &out.children);
+                i = p.refs(i, out.children.?);
             } else if (p.is(i, "mesh")) {
                 try p.checkType(i + 1, .primitive);
                 out.mesh = p.ref(i + 1);
@@ -1499,7 +1498,7 @@ const Parser = struct {
 
     fn scene(p: Parser, start: usize, out: *types.Scene) Fail!usize {
         try p.checkType(start, .object);
-        var seen: struct { nodes: bool = false, extensions: bool = false } = .{};
+        var seen: struct { extensions: bool = false } = .{};
         const size = p.tokens[start].size;
         var i = start + 1;
         var j: i32 = 0;
@@ -1508,8 +1507,8 @@ const Parser = struct {
             if (p.is(i, "name")) {
                 i = try p.string(i + 1, &out.name);
             } else if (p.is(i, "nodes")) {
-                i = try p.array(i + 1, u32, &out.nodes, &seen.nodes);
-                i = p.refs(i, out.nodes);
+                i = try p.optionalArray(i + 1, u32, &out.nodes);
+                i = p.refs(i, out.nodes.?);
             } else if (p.is(i, "extras")) {
                 i = try p.extras(i + 1, &out.extras);
             } else if (p.is(i, "extensions")) {
@@ -1962,12 +1961,12 @@ fn fixup(gltf: *Gltf) FixupError!void {
     }
     const nodes = gltf.nodes.len;
     for (gltf.skins) |skin| {
-        for (skin.joints) |joint| try check(joint, nodes);
+        for (skin.joints orelse &.{}) |joint| try check(joint, nodes);
         try check(skin.skeleton, nodes);
         try check(skin.inverse_bind_matrices, accessors);
     }
     for (gltf.nodes, 0..) |*node, n| {
-        for (node.children) |child| {
+        for (node.children orelse &.{}) |child| {
             try check(child, nodes);
             const child_node = &gltf.nodes[child];
             if (child_node.parent != null) return error.Invalid;
@@ -1982,7 +1981,7 @@ fn fixup(gltf: *Gltf) FixupError!void {
         }
     }
     for (gltf.scenes) |scene| {
-        for (scene.nodes) |root_node| {
+        for (scene.nodes orelse &.{}) |root_node| {
             try check(root_node, nodes);
             if (gltf.nodes[root_node].parent != null) return error.Invalid;
         }

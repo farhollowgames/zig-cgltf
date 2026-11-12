@@ -46,6 +46,8 @@ const Inputs = struct {
     uris: []const Uri,
     floats: []f32,
     indices: []u32,
+    /// Room for the longest written text, and cgltf's NUL after it.
+    text: []u8,
 };
 
 const Side = *const fn (in: *const Inputs) u64;
@@ -223,6 +225,38 @@ fn readFloatOriginal(in: *const Inputs) u64 {
     return hash;
 }
 
+fn readUintZig(in: *const Inputs) u64 {
+    var hash: u64 = 0;
+    for (in.models) |model| {
+        const gltf = model.port orelse continue;
+        for (gltf.accessors) |*accessor| {
+            for (0..accessor.count) |e| {
+                var out: [4]u32 = undefined;
+                const ok = cgltf.readUint(gltf, accessor, e, &out) catch break;
+                std.mem.doNotOptimizeAway(&out);
+                if (ok) hash = mix(hash, out[0]);
+            }
+        }
+    }
+    return hash;
+}
+
+fn readUintOriginal(in: *const Inputs) u64 {
+    var hash: u64 = 0;
+    for (in.models) |model| {
+        const data = model.original orelse continue;
+        for (data.accessors[0..data.accessors_count]) |*accessor| {
+            for (0..accessor.count) |e| {
+                var out: [4]u32 = undefined;
+                const ok = c.cgltf_accessor_read_uint(accessor, e, &out, 4) != 0;
+                std.mem.doNotOptimizeAway(&out);
+                if (ok) hash = mix(hash, out[0]);
+            }
+        }
+    }
+    return hash;
+}
+
 /// The accessors the index rows read: scalar, unsigned and not sparse.
 fn isIndexAccessor(accessor: *const cgltf.Accessor) bool {
     const t = accessor.component_type;
@@ -313,6 +347,32 @@ fn transformsOriginal(in: *const Inputs) u64 {
     return hash;
 }
 
+fn writeZig(in: *const Inputs) u64 {
+    var hash: u64 = 0;
+    for (in.models) |model| {
+        const gltf = model.port orelse continue;
+        var out: std.Io.Writer = .fixed(in.text);
+        cgltf.write(gltf, &out) catch continue;
+        const n = out.end;
+        std.mem.doNotOptimizeAway(in.text.ptr);
+        hash = mix(mix(hash, n), in.text[n / 2]);
+    }
+    return hash;
+}
+
+fn writeOriginal(in: *const Inputs) u64 {
+    var hash: u64 = 0;
+    var options = std.mem.zeroes(c.cgltf_options);
+    for (in.models) |model| {
+        const data = model.original orelse continue;
+        // The size counts the NUL.
+        const n = c.cgltf_write(&options, in.text.ptr, in.text.len, data) - 1;
+        std.mem.doNotOptimizeAway(in.text.ptr);
+        hash = mix(mix(hash, n), in.text[n / 2]);
+    }
+    return hash;
+}
+
 const cases = [_]Case{
     .{ .name = "parse glTF", .unit = "every .gltf file", .zig = parseGltfZig, .original = parseGltfOriginal },
     .{ .name = "parse GLB", .unit = "every .glb file", .zig = parseGlbZig, .original = parseGlbOriginal },
@@ -320,9 +380,11 @@ const cases = [_]Case{
     .{ .name = "validate", .unit = "every model", .zig = validateZig, .original = validateOriginal },
     .{ .name = "unpack floats", .unit = "every accessor", .zig = unpackFloatsZig, .original = unpackFloatsOriginal },
     .{ .name = "read float", .unit = "every element", .zig = readFloatZig, .original = readFloatOriginal },
+    .{ .name = "read uint", .unit = "every element", .zig = readUintZig, .original = readUintOriginal },
     .{ .name = "unpack indices", .unit = "every index accessor", .zig = unpackIndicesZig, .original = unpackIndicesOriginal },
     .{ .name = "read index", .unit = "every index", .zig = readIndexZig, .original = readIndexOriginal },
     .{ .name = "world transforms", .unit = "every node", .zig = transformsZig, .original = transformsOriginal },
+    .{ .name = "write", .unit = "every model's text", .zig = writeZig, .original = writeOriginal },
 };
 
 // --- Measurement ------------------------------------------------------------
@@ -408,6 +470,7 @@ fn prepare(io: std.Io) !Inputs {
     var uris: std.ArrayList(Uri) = .empty;
     var floats_max: usize = 0;
     var indices_max: usize = 0;
+    var text_max: u64 = 0;
     for (paths, models) |path, *model| {
         const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .unlimited);
         model.* = .{ .path = path, .bytes = bytes, .glb = std.mem.endsWith(u8, path, ".glb") };
@@ -443,6 +506,9 @@ fn prepare(io: std.Io) !Inputs {
             floats_max = @max(floats_max, cgltf.unpackFloatsCount(accessor));
             indices_max = @max(indices_max, accessor.count);
         }
+        var counter: std.Io.Writer.Discarding = .init(&.{});
+        try cgltf.write(port, &counter.writer);
+        text_max = @max(text_max, counter.fullCount() + 1);
     }
     return .{
         .io = io,
@@ -450,6 +516,7 @@ fn prepare(io: std.Io) !Inputs {
         .uris = try uris.toOwnedSlice(gpa),
         .floats = try gpa.alloc(f32, @min(floats_max, 1 << 26)),
         .indices = try gpa.alloc(u32, @min(indices_max, 1 << 26)),
+        .text = try gpa.alloc(u8, @intCast(text_max)),
     };
 }
 

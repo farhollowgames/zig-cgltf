@@ -211,7 +211,7 @@ pub fn validate(gltf: *const Gltf) Error!void {
     }
 
     for (gltf.scenes) |scene| {
-        for (scene.nodes) |root| {
+        for (scene.nodes orelse &.{}) |root| {
             if (gltf.nodes[root].parent != null) return error.InvalidGltf;
         }
     }

@@ -1,8 +1,9 @@
-//! The C library's text-to-number conversions as cgltf calls them: `atoi`,
-//! `atoll` and `atof`, with glibc's behaviour in the C locale. cgltf reads
-//! every JSON number through these, so a port that reads numbers any other
-//! way gives different integers and floats on unusual input: leading
-//! spaces, trailing text, hexadecimal floats, `nan(...)`, overflow.
+//! The C library's number conversions as cgltf calls them: `atoi`, `atoll`
+//! and `atof` to read, and `%.9g` to write, with glibc's behaviour in the C
+//! locale. cgltf reads and writes every JSON number through these, so a
+//! port that converts numbers any other way gives different integers, floats
+//! and text on unusual input: leading spaces, trailing text, hexadecimal
+//! floats, `nan(...)`, overflow, and digits past the shortest round trip.
 
 const std = @import("std");
 
@@ -197,6 +198,194 @@ pub fn toFloat(d: f64) f32 {
     return @floatCast(d);
 }
 
+/// The longest text `formatFloat` writes: a sign, nine digits, a point
+/// and a four-zero lead in fixed notation.
+pub const float_text_max = 16;
+
+/// glibc's `printf("%.9g", value)` in the C locale, as cgltf's writer
+/// prints every float: the value's nine leading significant digits,
+/// correctly rounded half to even from its exact binary value, in fixed
+/// notation for decimal exponents from -4 to 8 and in scientific notation
+/// otherwise, without trailing zeros; `inf`, `nan` and `-0` as glibc
+/// writes them. The text is in `buffer`.
+pub fn formatFloat(buffer: *[float_text_max]u8, value: f32) []const u8 {
+    const bits: u32 = @bitCast(value);
+    var len: usize = 0;
+    if (bits >> 31 != 0) {
+        buffer[0] = '-';
+        len = 1;
+    }
+    const exponent_bits = (bits >> 23) & 0xFF;
+    const fraction = bits & 0x7F_FFFF;
+    if (exponent_bits == 0xFF) {
+        const text = if (fraction == 0) "inf" else "nan";
+        @memcpy(buffer[len..][0..3], text);
+        return buffer[0 .. len + 3];
+    }
+    if (exponent_bits == 0 and fraction == 0) {
+        buffer[len] = '0';
+        return buffer[0 .. len + 1];
+    }
+    // The value is `mantissa * 2^binary_exponent` exactly.
+    const mantissa: u32 = if (exponent_bits == 0) fraction else fraction | 1 << 23;
+    const binary_exponent: i32 = if (exponent_bits == 0)
+        -149
+    else
+        @as(i32, @intCast(exponent_bits)) - 150;
+
+    // floor(log2(|value|)) gives floor(log10(|value|)) or one less, as a
+    // binade spans less than one decade; 78913 / 2^18 is log10(2) close
+    // enough over the floats' exponents.
+    const log2: i32 = 31 - @as(i32, @clz(mantissa)) + binary_exponent;
+    var decimal_exponent: i32 = (log2 * 78913) >> 18;
+    // |value| * 10^(8 - decimal_exponent), which has nine or ten digits.
+    const scaled = scale(mantissa, binary_exponent, 8 - decimal_exponent);
+    var digits = scaled.whole;
+    var remainder = scaled.remainder;
+    if (digits >= 1_000_000_000) {
+        const last = digits % 10;
+        digits /= 10;
+        decimal_exponent += 1;
+        remainder = if (last > 5 or (last == 5 and remainder != .zero))
+            .above_half
+        else if (last == 5)
+            .half
+        else
+            .below_half;
+    }
+    switch (remainder) {
+        .zero, .below_half => {},
+        .half => digits += digits & 1,
+        .above_half => digits += 1,
+    }
+    if (digits == 1_000_000_000) {
+        digits = 100_000_000;
+        decimal_exponent += 1;
+    }
+    var text: [9]u8 = undefined;
+    var rest: u32 = @intCast(digits);
+    var i: usize = 9;
+    while (i > 0) {
+        i -= 1;
+        text[i] = '0' + @as(u8, @intCast(rest % 10));
+        rest /= 10;
+    }
+    var significant: usize = 9;
+    while (text[significant - 1] == '0') significant -= 1;
+
+    if (decimal_exponent < -4 or decimal_exponent >= 9) {
+        buffer[len] = text[0];
+        len += 1;
+        if (significant > 1) {
+            buffer[len] = '.';
+            @memcpy(buffer[len + 1 ..][0 .. significant - 1], text[1..significant]);
+            len += significant;
+        }
+        buffer[len] = 'e';
+        buffer[len + 1] = if (decimal_exponent < 0) '-' else '+';
+        len += 2;
+        const shown = @abs(decimal_exponent);
+        if (shown >= 100) {
+            buffer[len] = '0' + @as(u8, @intCast(shown / 100));
+            len += 1;
+        }
+        buffer[len] = '0' + @as(u8, @intCast(shown / 10 % 10));
+        buffer[len + 1] = '0' + @as(u8, @intCast(shown % 10));
+        return buffer[0 .. len + 2];
+    }
+    if (decimal_exponent >= 0) {
+        const whole: usize = @intCast(decimal_exponent + 1);
+        @memcpy(buffer[len..][0..whole], text[0..whole]);
+        len += whole;
+        if (significant > whole) {
+            buffer[len] = '.';
+            @memcpy(buffer[len + 1 ..][0 .. significant - whole], text[whole..significant]);
+            len += 1 + significant - whole;
+        }
+        return buffer[0..len];
+    }
+    const zeros: usize = @intCast(-decimal_exponent - 1);
+    @memcpy(buffer[len..][0..2], "0.");
+    len += 2;
+    @memset(buffer[len..][0..zeros], '0');
+    len += zeros;
+    @memcpy(buffer[len..][0..significant], text[0..significant]);
+    return buffer[0 .. len + significant];
+}
+
+/// What is left below the whole part, against one half.
+const Remainder = enum { zero, below_half, half, above_half };
+
+/// A product's whole part and what is left below it.
+const Scaled = struct { whole: u64, remainder: Remainder };
+
+/// `mantissa * 2^binary_exponent * 10^decimal_scale`, exactly, for a whole
+/// part below 2^64.
+fn scale(mantissa: u32, binary_exponent: i32, decimal_scale: i32) Scaled {
+    if (binary_exponent >= 0) {
+        const shift: u7 = @intCast(binary_exponent);
+        if (decimal_scale >= 0) {
+            const product = (@as(u128, mantissa) << shift) * power10(u128, decimal_scale);
+            return .{ .whole = @intCast(product), .remainder = .zero };
+        }
+        // 10^k is 2^k * 5^k, and k is below `shift`: the value has fewer
+        // than 0.31 * (24 + shift) decimal digits. The twos cancel.
+        const divisor_exponent: u7 = @intCast(-decimal_scale);
+        const dividend = @as(u128, mantissa) << (shift - divisor_exponent);
+        const divisor = power5[divisor_exponent];
+        return .{
+            .whole = @intCast(dividend / divisor),
+            .remainder = against(u128, dividend % divisor, divisor),
+        };
+    }
+    // A value with a negative binary exponent is below 2^24, so it scales
+    // up, and the product has fewer bits the closer it is to one.
+    const shift: u8 = @intCast(-binary_exponent);
+    if (decimal_scale <= 11) return scaleDown(u64, mantissa, decimal_scale, shift);
+    if (decimal_scale <= 31) return scaleDown(u128, mantissa, decimal_scale, shift);
+    return scaleDown(u256, mantissa, decimal_scale, shift);
+}
+
+/// `mantissa * 10^decimal_scale / 2^shift` in `T`, which holds the product.
+fn scaleDown(comptime T: type, mantissa: u32, decimal_scale: i32, shift: u8) Scaled {
+    const product = @as(T, mantissa) * power10(T, decimal_scale);
+    const divisor = @as(T, 1) << @intCast(shift);
+    return .{
+        .whole = @intCast(product >> @intCast(shift)),
+        .remainder = against(T, product & (divisor - 1), divisor),
+    };
+}
+
+/// A remainder of a division by `divisor`, against one half.
+fn against(comptime T: type, remainder: T, divisor: T) Remainder {
+    if (remainder == 0) return .zero;
+    const twice = 2 * remainder;
+    if (twice < divisor) return .below_half;
+    if (twice == divisor) return .half;
+    return .above_half;
+}
+
+/// 10^n in `T`, for an `n` whose power `T` holds.
+fn power10(comptime T: type, n: i32) T {
+    const count = switch (T) {
+        u64 => 12,
+        u128 => 32,
+        u256 => 54,
+        else => @compileError("no table of powers of ten in " ++ @typeName(T)),
+    };
+    const table = comptime powers(T, 10, count);
+    return table[@intCast(n)];
+}
+
+/// 5^n for every `n` that `scale` divides by.
+const power5 = powers(u128, 5, 31);
+
+fn powers(comptime T: type, base: T, comptime count: usize) [count]T {
+    var table: [count]T = undefined;
+    for (&table, 0..) |*entry, n| entry.* = if (n == 0) 1 else table[n - 1] * base;
+    return table;
+}
+
 // --------------------------------------------------------
 // Tests
 // --------------------------------------------------------
@@ -222,4 +411,30 @@ test "strtod reads the forms glibc reads" {
     try testing.expectEqual(@as(u64, nan_bits | 16), @as(u64, @bitCast(strtod("nan(0x10)"))));
     try testing.expect(std.math.isInf(strtod("-Infinity")));
     try testing.expectEqual(@as(f64, 5.0), strtod("5e"));
+}
+
+test "formatFloat prints nine significant digits as glibc's %.9g" {
+    const cases = [_]struct { f32, []const u8 }{
+        .{ 0.1, "0.100000001" },
+        .{ 1, "1" },
+        .{ -2.5, "-2.5" },
+        .{ 0.5, "0.5" },
+        .{ 1e10, "1e+10" },
+        .{ 0.0001, "9.99999975e-05" },
+        .{ 0.001, "0.00100000005" },
+        .{ 123456789.0, "123456792" },
+        .{ 1234567890.0, "1.23456794e+09" },
+        .{ std.math.floatMax(f32), "3.40282347e+38" },
+        .{ std.math.floatTrueMin(f32), "1.40129846e-45" },
+        .{ -0.0, "-0" },
+        .{ 0.0, "0" },
+        .{ std.math.inf(f32), "inf" },
+        .{ -std.math.inf(f32), "-inf" },
+        .{ std.math.nan(f32), "nan" },
+        .{ -std.math.nan(f32), "-nan" },
+    };
+    for (cases) |case| {
+        var buffer: [float_text_max]u8 = undefined;
+        try testing.expectEqualStrings(case[1], formatFloat(&buffer, case[0]));
+    }
 }

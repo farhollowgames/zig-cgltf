@@ -86,13 +86,14 @@ before the fix. No person has yet reviewed the code or the tests.
 
 ### The original
 
-`reference/cgltf/` holds cgltf at tag v1.15 (`85cd623`), copied unmodified, and
-`reference/shim/cgltf.c` compiles its implementation. `zig build test` builds it with Zig's
-clang at `-O3`, as `-std=c99` with `-ffp-contract=off -fno-fast-math`, so float steps round
-as written, as Zig's do, and links it with the C library. Zig's `translate-c` turns
-`cgltf.h` into the declarations the tests call it through. The Khronos glTF-Sample-Assets
-models are a lazy dependency at commit `8f49239`, fetched only for the tests and the
-benchmark.
+`reference/cgltf/` holds cgltf at tag v1.15 (`85cd623`), copied unmodified;
+`reference/shim/cgltf.c` compiles the implementation of `cgltf.h`, and
+`reference/shim/cgltf_write.c` that of `cgltf_write.h`. `zig build test` builds them with
+Zig's clang at `-O3`, as `-std=c99` with `-ffp-contract=off -fno-fast-math`, so float steps
+round as written, as Zig's do, and links them with the C library. Zig's `translate-c` turns
+`cgltf.h` and `cgltf_write.h` into the declarations the tests call them through. The Khronos
+glTF-Sample-Assets models are a lazy dependency at commit `8f49239`, fetched only for the
+tests and the benchmark.
 
 ### What is compared
 
@@ -129,6 +130,24 @@ The helpers, on both sides:
 
 Every result code must match: the port's error is mapped to cgltf's `cgltf_result`.
 
+The writer, on both sides:
+
+- `cgltf_write` and `write` of every sample model, once with extras as parsed and once with
+  extras as JSON offsets only: the texts are compared byte for byte, and the size cgltf
+  returns for no buffer with the count of a `std.Io.Writer.Discarding`;
+- the written text parsed again by both and compared field by field, then written again and
+  compared;
+- `cgltf_write_file` and `writeFile` of every sample model as glTF and as GLB, the files
+  compared byte for byte, a GLB whose BIN chunk needs padding, and a path that cannot be
+  created;
+- extras on every kind of object the writer writes, and a fixed output larger than the
+  text, whose bytes past the text must be left as cgltf leaves them.
+
+`number.formatFloat` is compared with glibc's `snprintf("%.9g")` on hand-picked floats (ties
+at the ninth digit, every power of 2 and of 10 and its neighbours, the edges of the fixed and
+the scientific forms, infinities, NaNs and `-0`) and on 220,000 random floats. A probe run
+once, outside the tests, compared every positive finite float.
+
 One exception to comparing bits: a transform computed from a NaN may keep the NaN of either
 operand of an addition or a product, as the compiler orders them, and neither C nor Zig fixes
 that order. Computed transforms therefore count any NaN as equal to any NaN; a node's own
@@ -136,8 +155,8 @@ matrix, which both copy, and every other float, NaN included, are compared as bi
 
 ### Tests and counts
 
-`zig build test` runs 49 tests: 12 unit tests in `src/` and 37 tests in `test/`, through
-`test/differential.zig`. 25 of the 37 are oracle tests; the other 12 check the port's
+`zig build test` runs 67 tests: 16 unit tests in `src/` and 51 tests in `test/`, through
+`test/differential.zig`. 35 of the 51 are oracle tests; the other 16 check the port's
 refusals, failed allocations and a file reader of the caller's.
 
 | feature | inputs |
@@ -158,10 +177,12 @@ refusals, failed allocations and a file reader of the caller's.
 | `decodeString`, `decodeUri` | hand-picked texts, NUL bytes inside included, and 20,000 random texts; both sides decode in place, and every byte of the buffer is compared; a name from a parsed file decoded on both sides |
 | `loadBufferBase64` | 20,000 random texts of up to 400 characters, mostly valid with a bad character here and there, so the decoder's 64-character chunks are reached |
 | `numComponents`, `componentSize`, `calcSize` | every type and component type |
+| `write`, `writeFile` | every sample model as text, as a glTF file and as a GLB file; extras on every object; a padded BIN chunk; 3,000 generated documents |
+| `formatFloat` | hand-picked floats and 220,000 random ones, against glibc's `%.9g` |
 
 ### Fuzzing
 
-Three oracle tests fuzz whole files:
+Four oracle tests fuzz whole files:
 
 - **Mutations**: 3,000 cases, each one of the sample models of at most 32 KiB or a file of
   cgltf's own fuzz corpus, changed by random byte edits, insertions from cgltf's AFL
@@ -173,6 +194,10 @@ Three oracle tests fuzz whole files:
 - **Layouts**: 3,000 files of one buffer of random bytes, two views and one accessor of a
   random type, component type, normalization, count, stride and offset, sparse one time in
   three, none of them validated, so the accessor helpers meet every edge of the buffer.
+
+- **Written documents**: 3,000 more generated documents, each written by both sides and
+  compared byte for byte, then parsed again from the text and compared; at least 1,000 must
+  be written.
 
 Each test counts how far its cases went, and fails if too few got through validation or
 failed after parsing, so the fuzzing reaches every step: at least 250 valid cases for the

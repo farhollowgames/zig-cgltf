@@ -153,6 +153,81 @@ test "refusal: a token count whose array size overflows is out of memory" {
     }));
 }
 
+test "refusal: writing extras whose offsets lie outside the JSON" {
+    // cgltf writes extras without `data` from the JSON at their offsets,
+    // unchecked.
+    var gltf = try cgltf.parse(testing.allocator, "{\"asset\":{\"version\":\"2.0\"},\"extras\":{\"a\":1}}", .{});
+    defer gltf.deinit();
+    gltf.extras.data = null;
+    var out: std.Io.Writer.Discarding = .init(&.{});
+    try cgltf.write(&gltf, &out.writer);
+    gltf.extras.end_offset = gltf.json.len + 1;
+    try testing.expectError(error.OutOfBounds, cgltf.write(&gltf, &out.writer));
+    gltf.extras.start_offset = gltf.json.len;
+    gltf.extras.end_offset = 2;
+    try testing.expectError(error.OutOfBounds, cgltf.write(&gltf, &out.writer));
+}
+
+test "refusal: writing extras whose JSON holds a NUL" {
+    // cgltf's `%.*s` stops at the NUL while its size counts the whole range,
+    // and the text cut there can leave the extras' JSON unclosed. jsmn stops
+    // at a NUL, so only JSON a caller changed after parsing holds one.
+    var json = "{\"asset\":{\"version\":\"2.0\"},\"extras\":{\"a\":\"bcd\"}}".*;
+    var gltf = try cgltf.parse(testing.allocator, &json, .{});
+    defer gltf.deinit();
+    gltf.extras.data = null;
+    var out: std.Io.Writer.Discarding = .init(&.{});
+    try cgltf.write(&gltf, &out.writer);
+    json[gltf.extras.start_offset + 7] = 0;
+    try testing.expectError(error.InvalidExtras, cgltf.write(&gltf, &out.writer));
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const gpa = testing.allocator;
+    const path = try std.fs.path.join(gpa, &.{ ".zig-cache", "tmp", &tmp.sub_path, "a.glb" });
+    defer gpa.free(path);
+    try testing.expectError(error.InvalidExtras, cgltf.writeFile(&gltf, testing.io, path, .glb));
+    // A NUL just past the range is not part of the extras.
+    json[gltf.extras.start_offset + 7] = 'c';
+    json[gltf.extras.end_offset] = 0;
+    try cgltf.write(&gltf, &out.writer);
+}
+
+test "refusal: writing extras whose data holds a NUL" {
+    // cgltf's `%s` stops at the NUL, which can leave the extras' JSON
+    // unclosed.
+    var gltf = try cgltf.parse(testing.allocator, "{\"asset\":{\"version\":\"2.0\"}}", .{});
+    defer gltf.deinit();
+    var data = "{\"a\":\"bcd\"}".*;
+    gltf.extras.data = &data;
+    var out: std.Io.Writer.Discarding = .init(&.{});
+    try cgltf.write(&gltf, &out.writer);
+    data[7] = 0;
+    try testing.expectError(error.InvalidExtras, cgltf.write(&gltf, &out.writer));
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const gpa = testing.allocator;
+    const path = try std.fs.path.join(gpa, &.{ ".zig-cache", "tmp", &tmp.sub_path, "a.gltf" });
+    defer gpa.free(path);
+    try testing.expectError(error.InvalidExtras, cgltf.writeFile(&gltf, testing.io, path, .gltf));
+}
+
+test "refusal: writing into an output too small for the text" {
+    // cgltf's snprintf calls move past a short buffer's end, and the next
+    // call writes past it.
+    var gltf = try cgltf.parse(testing.allocator, "{\"asset\":{\"version\":\"2.0\"}}", .{});
+    defer gltf.deinit();
+    var counter: std.Io.Writer.Discarding = .init(&.{});
+    try cgltf.write(&gltf, &counter.writer);
+    const size: usize = @intCast(counter.fullCount());
+    var buffer: [256]u8 = undefined;
+    for (0..size) |n| {
+        var out: std.Io.Writer = .fixed(buffer[0..n]);
+        try testing.expectError(error.WriteFailed, cgltf.write(&gltf, &out));
+    }
+    var out: std.Io.Writer = .fixed(buffer[0..size]);
+    try cgltf.write(&gltf, &out);
+}
+
 fn parseLoadValidate(allocator: std.mem.Allocator, path: [:0]const u8) !void {
     var gltf = try cgltf.parseFile(allocator, testing.io, path, .{});
     defer gltf.deinit();

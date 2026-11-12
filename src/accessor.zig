@@ -191,17 +191,24 @@ inline fn elementReadFloat(
     return true;
 }
 
-fn elementReadUint(memory: []const u8, offset: usize, accessor: *const Accessor, out: []u32) ReadError!bool {
-    const num_components = cgltf.numComponents(accessor.type);
-    if (out.len < num_components) return false;
+/// Inline, like `elementReadFloat`, choosing the component and element
+/// type once.
+inline fn elementReadUint(memory: []const u8, offset: usize, accessor: *const Accessor, out: []u32) ReadError!bool {
     switch (accessor.type) {
         .mat2, .mat3, .mat4 => return false,
-        else => {},
-    }
-    const component_size = cgltf.componentSize(accessor.component_type);
-    const bytes = try bytesAt(memory, offset, elementSpan(accessor.type, accessor.component_type));
-    for (out[0..num_components], 0..) |*value, i| {
-        value.* = componentReadUint(bytes[component_size * i ..], accessor.component_type);
+        inline else => |t| {
+            const num_components = comptime cgltf.numComponents(t);
+            if (out.len < num_components) return false;
+            switch (accessor.component_type) {
+                inline else => |component_type| {
+                    const component_size = comptime cgltf.componentSize(component_type);
+                    const bytes = try bytesAt(memory, offset, comptime elementSpan(t, component_type));
+                    inline for (out[0..num_components], 0..) |*value, i| {
+                        value.* = componentReadUint(bytes[component_size * i ..], component_type);
+                    }
+                },
+            }
+        },
     }
     return true;
 }
@@ -271,16 +278,27 @@ pub fn readUint(gltf: *const Gltf, accessor: *const Accessor, index: usize, out:
 /// as an index; 0 for a type that is not an unsigned integer, and for no
 /// buffer view or an unloaded buffer.
 pub fn readIndex(gltf: *const Gltf, accessor: *const Accessor, index: usize) ReadError!usize {
-    const size = indexSize(accessor.component_type);
+    switch (accessor.component_type) {
+        inline .r_8u, .r_16u, .r_32u => |component_type| {
+            return readIndexAs(Stored(component_type), gltf, accessor, index);
+        },
+        else => {
+            if (accessor.is_sparse) _ = try findSparseIndex(gltf, accessor, index);
+            return 0;
+        },
+    }
+}
+
+/// `readIndex` for an accessor whose components are stored as `T`.
+inline fn readIndexAs(comptime T: type, gltf: *const Gltf, accessor: *const Accessor, index: usize) ReadError!usize {
     if (accessor.is_sparse) {
         if (try findSparseIndex(gltf, accessor, index)) |element| {
-            return componentReadIndex(try bytesAt(element.memory, element.offset, size), accessor.component_type);
+            return readInt(T, try bytesAt(element.memory, element.offset, @sizeOf(T)));
         }
     }
     const view = accessor.buffer_view orelse return 0;
     const memory = viewData(gltf, view) orelse return 0;
-    const bytes = try bytesAt(memory, accessor.offset +% accessor.stride *% index, size);
-    return componentReadIndex(bytes, accessor.component_type);
+    return readInt(T, try bytesAt(memory, accessor.offset +% accessor.stride *% index, @sizeOf(T)));
 }
 
 /// Whether `span` bytes of each of the first `count` elements of
