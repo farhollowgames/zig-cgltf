@@ -225,6 +225,38 @@ fn readFloatOriginal(in: *const Inputs) u64 {
     return hash;
 }
 
+fn readUintZig(in: *const Inputs) u64 {
+    var hash: u64 = 0;
+    for (in.models) |model| {
+        const gltf = model.port orelse continue;
+        for (gltf.accessors) |*accessor| {
+            for (0..accessor.count) |e| {
+                var out: [4]u32 = undefined;
+                const ok = cgltf.readUint(gltf, accessor, e, &out) catch break;
+                std.mem.doNotOptimizeAway(&out);
+                if (ok) hash = mix(hash, out[0]);
+            }
+        }
+    }
+    return hash;
+}
+
+fn readUintOriginal(in: *const Inputs) u64 {
+    var hash: u64 = 0;
+    for (in.models) |model| {
+        const data = model.original orelse continue;
+        for (data.accessors[0..data.accessors_count]) |*accessor| {
+            for (0..accessor.count) |e| {
+                var out: [4]u32 = undefined;
+                const ok = c.cgltf_accessor_read_uint(accessor, e, &out, 4) != 0;
+                std.mem.doNotOptimizeAway(&out);
+                if (ok) hash = mix(hash, out[0]);
+            }
+        }
+    }
+    return hash;
+}
+
 /// The accessors the index rows read: scalar, unsigned and not sparse.
 fn isIndexAccessor(accessor: *const cgltf.Accessor) bool {
     const t = accessor.component_type;
@@ -348,6 +380,7 @@ const cases = [_]Case{
     .{ .name = "validate", .unit = "every model", .zig = validateZig, .original = validateOriginal },
     .{ .name = "unpack floats", .unit = "every accessor", .zig = unpackFloatsZig, .original = unpackFloatsOriginal },
     .{ .name = "read float", .unit = "every element", .zig = readFloatZig, .original = readFloatOriginal },
+    .{ .name = "read uint", .unit = "every element", .zig = readUintZig, .original = readUintOriginal },
     .{ .name = "unpack indices", .unit = "every index accessor", .zig = unpackIndicesZig, .original = unpackIndicesOriginal },
     .{ .name = "read index", .unit = "every index", .zig = readIndexZig, .original = readIndexOriginal },
     .{ .name = "world transforms", .unit = "every node", .zig = transformsZig, .original = transformsOriginal },
