@@ -304,6 +304,29 @@ const Context = struct {
         try c.out.writeAll(text);
     }
 
+    /// A decimal integer, written in the writer's buffer when it has the
+    /// room for any.
+    fn int(c: *Context, value: anytype) WriteError!void {
+        const unused = c.out.unusedCapacitySlice();
+        if (unused.len < 20) return c.out.print("{d}", .{value});
+        var magnitude: u64 = @abs(value);
+        const sign: usize = @intFromBool(value < 0);
+        const len = sign + 1 + if (magnitude == 0) 0 else std.math.log10_int(magnitude);
+        // The digits overwrite the sign of a value that has none.
+        unused[0] = '-';
+        var end: usize = len;
+        while (magnitude >= 100) : (magnitude /= 100) {
+            end -= 2;
+            unused[end..][0..2].* = std.fmt.digits2(@intCast(magnitude % 100));
+        }
+        if (magnitude >= 10) {
+            unused[end - 2 ..][0..2].* = std.fmt.digits2(@intCast(magnitude));
+        } else {
+            unused[end - 1] = '0' + @as(u8, @intCast(magnitude));
+        }
+        c.out.advance(len);
+    }
+
     /// Opens a property: a new line, then the label in quotes.
     fn label(c: *Context, comptime name: []const u8) WriteError!void {
         try c.indent();
@@ -319,7 +342,9 @@ const Context = struct {
     fn strProp(c: *Context, comptime name: []const u8, value: ?[]const u8) WriteError!void {
         const text = value orelse return;
         try c.label(name);
-        try c.out.print("\"{s}\"", .{cString(text)});
+        try c.literal("\"");
+        try c.out.writeAll(cString(text));
+        try c.literal("\"");
         c.needs_comma = true;
     }
 
@@ -332,7 +357,7 @@ const Context = struct {
     fn intProp(c: *Context, comptime name: []const u8, value: i32, default: i32) WriteError!void {
         if (value == default) return;
         try c.label(name);
-        try c.out.print("{d}", .{value});
+        try c.int(value);
         c.needs_comma = true;
     }
 
@@ -344,7 +369,7 @@ const Context = struct {
     ) WriteError!void {
         if (value == default) return;
         try c.label(name);
-        try c.out.print("{d}", .{value});
+        try c.int(value);
         c.needs_comma = true;
     }
 
@@ -407,7 +432,7 @@ const Context = struct {
         const i = index orelse return;
         if (i == invalid_index) return;
         try c.label(name);
-        try c.out.print("{d}", .{cInt(i)});
+        try c.int(cInt(i));
         c.needs_comma = true;
     }
 
@@ -422,10 +447,11 @@ const Context = struct {
         // cgltf counts in an `int`.
         const count: usize = @intCast(@max(cInt(items.len), 0));
         for (items[0..count], 0..) |index, i| {
-            if (i != 0) try c.out.writeAll(",");
-            try c.out.print(" {d}", .{cInt(index)});
+            if (i != 0) try c.literal(",");
+            try c.literal(" ");
+            try c.int(cInt(index));
         }
-        try c.out.writeAll(" ]");
+        try c.literal(" ]");
         c.needs_comma = true;
     }
 
@@ -498,7 +524,7 @@ const Context = struct {
         for (items) |attribute| {
             if (attribute.data == invalid_index) continue;
             try c.labelText(attribute.name);
-            try c.out.print("{d}", .{cInt(attribute.data)});
+            try c.int(cInt(attribute.data));
             c.needs_comma = true;
         }
     }
