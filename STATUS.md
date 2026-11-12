@@ -70,6 +70,11 @@ Written to resume from: the next agent reads this section and `git log`.
     5.96).
   - unpack indices: the same single check, then unchecked reads, with packed indices
     widened 16 at a time as vectors: 14.4 to 4.5 ms (ratio 0.75 to 2.68).
+  - parse glTF: jsmn's string loop steps over 64 bytes at a time while they hold no quote,
+    backslash or NUL (data URIs are long strings, read twice): 93.1 to 64.8 ms (ratio 1.11
+    to 1.46); parse GLB unchanged within noise (38.6 to 39.3 ms). A unit test in
+    `jsmn.zig` puts an escape, a refused escape, a NUL and an escaped quote at every
+    position of long strings.
 - Steps 6 and 7 (skeptic, fixes): not started.
 
 Next steps, in order: on `review/perf-and-skeptic`, a fresh agent's performance pass (each
