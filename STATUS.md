@@ -230,11 +230,11 @@ From `cgltf_write.h`, on branch `port/writer`.
 
 | upstream | zig-cgltf | tests | state |
 | --- | --- | --- | --- |
-| `cgltf_write` into a buffer | `write` to an `std.Io.Writer` | write-samples, write-again, write-fuzz, write-output, write-unit | reviewed |
-| `cgltf_write` with no buffer (the size) | `write` to an `std.Io.Writer.Discarding` | write-samples, write-refusals | reviewed |
-| `cgltf_write_file`, glTF and GLB | `writeFile` | write-files, write-glb | reviewed |
-| every object, extension and extras the writer writes | as upstream | write-samples, write-fuzz, write-extras | reviewed |
-| `%.9g` through `snprintf` | `number.formatFloat` | floats | reviewed |
+| `cgltf_write` into a buffer | `write` to an `std.Io.Writer` | write-samples, write-again, write-fuzz, write-output, write-unit | benchmarked |
+| `cgltf_write` with no buffer (the size) | `write` to an `std.Io.Writer.Discarding` | write-samples, write-refusals | oracle-tested |
+| `cgltf_write_file`, glTF and GLB | `writeFile` | write-files, write-glb | oracle-tested |
+| every object, extension and extras the writer writes | as upstream | write-samples, write-fuzz, write-extras | oracle-tested |
+| `%.9g` through `snprintf` | `number.formatFloat` | floats | oracle-tested |
 
 ## Left out
 

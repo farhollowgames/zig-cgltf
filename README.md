@@ -4,9 +4,10 @@ Tracks cgltf 1.15 · Zig 0.17 · [status](STATUS.md)
 
 ## What it is
 
-A Zig port of cgltf, Johannes Kuhlmann's single-header C loader for glTF 2.0. It parses glTF
-JSON and GLB files, loads their buffers, validates them, and reads accessors and node
-transforms, as cgltf 1.15 does. The original is listed under
+A Zig port of cgltf, Johannes Kuhlmann's single-header C loader for glTF 2.0, and of its
+writer, `cgltf_write.h`. It parses glTF JSON and GLB files, loads their buffers, validates
+them, reads accessors and node transforms, and writes glTF and GLB files, as cgltf 1.15
+does. The original is listed under
 [Licence and references](#licence-and-references).
 
 This port is not affiliated with or reviewed by the original authors. Its code was written
@@ -23,6 +24,9 @@ with AI assistance for Farhollow Games, and is only machine verified. See
 - Node transforms, local and world.
 - Every extension cgltf reads (21 KHR and EXT extensions, listed in [`STATUS.md`](STATUS.md));
   extras and unknown extensions kept as offsets into the JSON.
+- Writing: `write` puts the glTF JSON text to an `std.Io.Writer`, and `writeFile` writes a
+  glTF or GLB file, byte for byte as `cgltf_write.h` writes them, floats printed as glibc's
+  `%.9g`.
 - Pure Zig, with no libc. Memory comes from an `std.mem.Allocator`, and files are read through
   `std.Io` or a reader of the caller's.
 
@@ -63,6 +67,12 @@ pub fn positions(gpa: std.mem.Allocator, io: std.Io, path: []const u8) ![]f32 {
 }
 ```
 
+Write a model back, as glTF or GLB:
+
+```zig
+try cgltf.writeFile(&gltf, io, "copy.glb", .glb);
+```
+
 Everything in a `Gltf` lives until `deinit`; slices taken from it are stale after that. A
 `Gltf` from `parse` points into the bytes it was given, which must outlive it.
 
@@ -72,7 +82,8 @@ The reasons are in [`doc/parity.md`](doc/parity.md).
 
 *Additions*:
 
-- `error.OutOfBounds` where cgltf would read or write past a buffer, an output or a string.
+- `error.OutOfBounds` where cgltf would read or write past a buffer, an output or a string,
+  extras outside the JSON among them.
 - `error.ParentCycle` from `transformWorld` on a loop of parents, where cgltf never returns.
 - `unpackFloatsCount` and `unpackIndicesCount`, the counts cgltf returns for a null output.
 - `number`, the C library's `atoi`, `atoll` and `atof` as cgltf reads numbers with them.
@@ -89,20 +100,28 @@ The reasons are in [`doc/parity.md`](doc/parity.md).
   file callbacks.
 - `Camera` is a tagged union of perspective and orthographic.
 - `unpackIndices` takes the output's integer type, where cgltf takes a size in bytes.
+- `write` writes to an `std.Io.Writer` and adds no NUL; the size cgltf returns for no
+  buffer is the count of an `std.Io.Writer.Discarding`. An output too small for the text is
+  `error.WriteFailed`, where cgltf writes past it.
+- `writeFile` takes the file type, where cgltf reads it from its options, and returns
+  `error.IoError` when writing the file fails, where cgltf returns success.
+- A node's `children`, a skin's `joints` and a scene's `nodes` are optional: `null` when the
+  file has none, and empty for `[]`, which cgltf writes back.
 - `error.InvalidOptions` is never returned: cgltf returns it for a null options pointer, which
   the port has no way to be given.
 
 ## Not included
 
-The parts of cgltf that are left out, each with its reason, are listed in
-[`STATUS.md`](STATUS.md#left-out).
+Nothing: every function of `cgltf.h` and `cgltf_write.h` is ported, and
+[`STATUS.md`](STATUS.md) lists each one with its tests.
 
 ## Testing and benchmarks
 
-`zig build test` runs 49 tests: 12 unit tests and 37 tests that build cgltf from `reference/`.
-Most of the 37 run cgltf and the port on the same inputs (every Khronos sample model,
-hand-made edge cases and 10,000 fuzzed files) and compare every field of the result, every
-string byte, every reference as an index, and every float as bits.
+`zig build test` runs 65 tests: 16 unit tests and 49 tests that build cgltf from `reference/`.
+Most of the 49 run cgltf and the port on the same inputs (every Khronos sample model,
+hand-made edge cases and 13,000 fuzzed files) and compare every field of the result, every
+string byte, every reference as an index, every float as bits, and every byte of the text
+and files written.
 
 Time taken by zig-cgltf against cgltf, one thread, over every sample model:
 
@@ -121,14 +140,16 @@ clang at `-O3`. [`doc/TESTING.md`](doc/TESTING.md) describes the tests, and
 ## Licence and references
 
 zig-cgltf is licensed under the MIT licence ([`LICENSE`](LICENSE)), as cgltf is, and keeps
-cgltf's copyright notice:
+cgltf's copyright notices:
 
     Copyright (c) 2018-2021 Johannes Kuhlmann
+    Copyright (c) 2019-2021 Philip Rideout
 
 [`NOTICE`](NOTICE) names the translated sources, jsmn among them.
 
-- cgltf: <https://github.com/jkuhlmann/cgltf>, by Johannes Kuhlmann, tag v1.15
-  (`85cd623`), vendored in `reference/cgltf/` for the tests and the benchmark only.
+- cgltf: <https://github.com/jkuhlmann/cgltf>, by Johannes Kuhlmann, with `cgltf_write.h` by
+  Philip Rideout, tag v1.15 (`85cd623`), vendored in `reference/cgltf/` for the tests and the
+  benchmark only.
 - jsmn, the JSON tokenizer cgltf includes: <https://github.com/zserge/jsmn>, by Serge
   Zaitsev.
 - glTF 2.0: <https://registry.khronos.org/glTF/>, and the Khronos sample models at
