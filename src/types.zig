@@ -3,6 +3,11 @@
 //! here (`?u32`, or `u32` where glTF requires the reference), into the
 //! `Gltf` array of that kind; a channel's sampler is an index into its
 //! animation's samplers. An array with a count is a slice.
+//!
+//! Zig 0.17 lays a struct's fields out by alignment, the 8-byte ones
+//! first. A field marked `align(8)` is one `validate` reads of every
+//! accessor or node: the mark places it among the first fields, in the
+//! cache lines of the others it reads, rather than after the large ones.
 
 const std = @import("std");
 
@@ -222,19 +227,19 @@ pub const AccessorSparse = struct {
 
 pub const Accessor = struct {
     name: ?[:0]u8 = null,
-    component_type: ComponentType = .invalid,
+    component_type: ComponentType align(8) = .invalid,
     normalized: bool = false,
-    type: Type = .invalid,
+    type: Type align(8) = .invalid,
     offset: usize = 0,
     count: usize = 0,
     /// The buffer view's stride, or the element size when that is 0.
     stride: usize = 0,
-    buffer_view: ?u32 = null,
+    buffer_view: ?u32 align(8) = null,
     has_min: bool = false,
     min: [16]f32 = @splat(0),
     has_max: bool = false,
     max: [16]f32 = @splat(0),
-    is_sparse: bool = false,
+    is_sparse: bool align(8) = false,
     sparse: AccessorSparse = .{},
     extras: Extras = .{},
     extensions: []Extension = &.{},
@@ -521,10 +526,10 @@ pub const Light = struct {
 pub const Node = struct {
     name: ?[:0]u8 = null,
     /// Set from the parent's `children`.
-    parent: ?u32 = null,
+    parent: ?u32 align(8) = null,
     children: []u32 = &.{},
     skin: ?u32 = null,
-    mesh: ?u32 = null,
+    mesh: ?u32 align(8) = null,
     camera: ?u32 = null,
     light: ?u32 = null,
     /// Null and empty differ as for `Mesh.weights`.
