@@ -199,14 +199,25 @@ pub fn validate(gltf: *const Gltf) Error!void {
         }
     }
 
-    // A loop in the parents, found by one step and two steps at a time.
-    for (gltf.nodes) |*node| {
-        var p1 = node.parent;
-        var p2 = if (p1) |p| gltf.nodes[p].parent else null;
-        while (p1 != null and p2 != null) {
-            if (p1.? == p2.?) return error.InvalidGltf;
-            p1 = gltf.nodes[p1.?].parent;
-            p2 = if (gltf.nodes[p2.?].parent) |p| gltf.nodes[p].parent else null;
+    // A loop in the parents. Each node before `i` is known to reach a
+    // root, so a walk up from `i` ends at the first of them it meets.
+    // Otherwise a loop is found as Brent's method finds one: the walk
+    // compares each node with a mark, which moves up to where the walk
+    // is after 1, 2, 4, ... steps.
+    for (gltf.nodes, 0..) |*node, i| {
+        var mark = i;
+        var steps: usize = 0;
+        var steps_to_move: usize = 1;
+        var next = node.parent;
+        while (next) |parent| : (next = gltf.nodes[parent].parent) {
+            if (parent < i) break;
+            if (parent == mark) return error.InvalidGltf;
+            steps += 1;
+            if (steps == steps_to_move) {
+                mark = parent;
+                steps = 0;
+                steps_to_move *= 2;
+            }
         }
     }
 
