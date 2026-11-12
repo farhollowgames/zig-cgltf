@@ -227,50 +227,40 @@ pub fn formatFloat(buffer: *[float_text_max]u8, value: f32) []const u8 {
         return buffer[0 .. len + 1];
     }
     // The value is `mantissa * 2^binary_exponent` exactly.
-    const mantissa: u256 = if (exponent_bits == 0) fraction else fraction | 1 << 23;
+    const mantissa: u32 = if (exponent_bits == 0) fraction else fraction | 1 << 23;
     const binary_exponent: i32 = if (exponent_bits == 0)
         -149
     else
         @as(i32, @intCast(exponent_bits)) - 150;
 
-    // `decimal_exponent` is floor(log10(|value|)); the estimate can be one
-    // off, and the digits tell which way.
-    const magnitude = @abs(@as(f64, value));
-    var decimal_exponent: i32 = @intFromFloat(@floor(std.math.log10(magnitude)));
-    var digits: u256 = undefined;
-    while (true) {
-        // |value| * 10^(8 - decimal_exponent) as a quotient and remainder.
-        var numerator = mantissa;
-        var denominator: u256 = 1;
-        if (binary_exponent >= 0) {
-            numerator <<= @intCast(binary_exponent);
-        } else {
-            denominator <<= @intCast(-binary_exponent);
-        }
-        const scale = 8 - decimal_exponent;
-        if (scale >= 0) {
-            numerator *= power10(@intCast(scale));
-        } else {
-            denominator *= power10(@intCast(-scale));
-        }
-        digits = numerator / denominator;
-        if (digits >= 1_000_000_000) {
-            decimal_exponent += 1;
-            continue;
-        }
-        if (digits < 100_000_000) {
-            decimal_exponent -= 1;
-            continue;
-        }
-        const remainder = numerator % denominator;
-        if (2 * remainder > denominator or (2 * remainder == denominator and digits & 1 == 1)) {
-            digits += 1;
-        }
-        if (digits == 1_000_000_000) {
-            digits = 100_000_000;
-            decimal_exponent += 1;
-        }
-        break;
+    // floor(log2(|value|)) gives floor(log10(|value|)) or one less, as a
+    // binade spans less than one decade; 78913 / 2^18 is log10(2) close
+    // enough over the floats' exponents.
+    const log2: i32 = 31 - @as(i32, @clz(mantissa)) + binary_exponent;
+    var decimal_exponent: i32 = (log2 * 78913) >> 18;
+    // |value| * 10^(8 - decimal_exponent), which has nine or ten digits.
+    const scaled = scale(mantissa, binary_exponent, 8 - decimal_exponent);
+    var digits = scaled.whole;
+    var remainder = scaled.remainder;
+    if (digits >= 1_000_000_000) {
+        const last = digits % 10;
+        digits /= 10;
+        decimal_exponent += 1;
+        remainder = if (last > 5 or (last == 5 and remainder != .zero))
+            .above_half
+        else if (last == 5)
+            .half
+        else
+            .below_half;
+    }
+    switch (remainder) {
+        .zero, .below_half => {},
+        .half => digits += digits & 1,
+        .above_half => digits += 1,
+    }
+    if (digits == 1_000_000_000) {
+        digits = 100_000_000;
+        decimal_exponent += 1;
     }
     var text: [9]u8 = undefined;
     var rest: u32 = @intCast(digits);
@@ -323,10 +313,77 @@ pub fn formatFloat(buffer: *[float_text_max]u8, value: f32) []const u8 {
     return buffer[0 .. len + significant];
 }
 
-fn power10(n: u32) u256 {
-    var result: u256 = 1;
-    for (0..n) |_| result *= 10;
-    return result;
+/// What is left below the whole part, against one half.
+const Remainder = enum { zero, below_half, half, above_half };
+
+/// A product's whole part and what is left below it.
+const Scaled = struct { whole: u64, remainder: Remainder };
+
+/// `mantissa * 2^binary_exponent * 10^decimal_scale`, exactly, for a whole
+/// part below 2^64.
+fn scale(mantissa: u32, binary_exponent: i32, decimal_scale: i32) Scaled {
+    if (binary_exponent >= 0) {
+        const shift: u7 = @intCast(binary_exponent);
+        if (decimal_scale >= 0) {
+            const product = (@as(u128, mantissa) << shift) * power10(u128, decimal_scale);
+            return .{ .whole = @intCast(product), .remainder = .zero };
+        }
+        // 10^k is 2^k * 5^k, and k is below `shift`: the value has fewer
+        // than 0.31 * (24 + shift) decimal digits. The twos cancel.
+        const divisor_exponent: u7 = @intCast(-decimal_scale);
+        const dividend = @as(u128, mantissa) << (shift - divisor_exponent);
+        const divisor = power5[divisor_exponent];
+        return .{
+            .whole = @intCast(dividend / divisor),
+            .remainder = against(u128, dividend % divisor, divisor),
+        };
+    }
+    // A value with a negative binary exponent is below 2^24, so it scales
+    // up, and the product has fewer bits the closer it is to one.
+    const shift: u8 = @intCast(-binary_exponent);
+    if (decimal_scale <= 11) return scaleDown(u64, mantissa, decimal_scale, shift);
+    if (decimal_scale <= 31) return scaleDown(u128, mantissa, decimal_scale, shift);
+    return scaleDown(u256, mantissa, decimal_scale, shift);
+}
+
+/// `mantissa * 10^decimal_scale / 2^shift` in `T`, which holds the product.
+fn scaleDown(comptime T: type, mantissa: u32, decimal_scale: i32, shift: u8) Scaled {
+    const product = @as(T, mantissa) * power10(T, decimal_scale);
+    const divisor = @as(T, 1) << @intCast(shift);
+    return .{
+        .whole = @intCast(product >> @intCast(shift)),
+        .remainder = against(T, product & (divisor - 1), divisor),
+    };
+}
+
+/// A remainder of a division by `divisor`, against one half.
+fn against(comptime T: type, remainder: T, divisor: T) Remainder {
+    if (remainder == 0) return .zero;
+    const twice = 2 * remainder;
+    if (twice < divisor) return .below_half;
+    if (twice == divisor) return .half;
+    return .above_half;
+}
+
+/// 10^n in `T`, for an `n` whose power `T` holds.
+fn power10(comptime T: type, n: i32) T {
+    const count = switch (T) {
+        u64 => 12,
+        u128 => 32,
+        u256 => 54,
+        else => @compileError("no table of powers of ten in " ++ @typeName(T)),
+    };
+    const table = comptime powers(T, 10, count);
+    return table[@intCast(n)];
+}
+
+/// 5^n for every `n` that `scale` divides by.
+const power5 = powers(u128, 5, 31);
+
+fn powers(comptime T: type, base: T, comptime count: usize) [count]T {
+    var table: [count]T = undefined;
+    for (&table, 0..) |*entry, n| entry.* = if (n == 0) 1 else table[n - 1] * base;
+    return table;
 }
 
 // --------------------------------------------------------
