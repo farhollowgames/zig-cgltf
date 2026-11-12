@@ -9,6 +9,11 @@ already walked from; and `align(8)` places the fields `validate` reads of every 
 node among the first. Tests: 51, with a unit test of the index bound and an edge test of
 every graph of parents of up to five nodes.
 
+Picked from `port/writer` (`cde6c5b`, `5d9ed4e`): world transforms as `@Vector` columns
+and `readIndex` choosing the component type once. World transforms goes from 0.77 to 1.18
+and read index from 0.89 to 1.23, the medians of five and seven runs. The 1.19 reported for
+world transforms was `port/writer`'s; `review/perf-and-skeptic` measures 0.77.
+
 ## Step-7 report
 
 Done: steps 5 to 7 on branch `review/perf-and-skeptic`, pushed; `main` holds steps 1 to 4.
