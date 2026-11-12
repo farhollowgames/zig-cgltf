@@ -24,6 +24,7 @@ on those calls. Each case has a test in `test/refusals_test.zig`.
 | `parse` of JSON with more than 2^31 - 1 tokens: cgltf keeps the count in an `int` | overflows the `int` | `error.InvalidJson` | none: the input needs a file of more than 4 GiB |
 | `write` of extras without `data` whose offsets a caller moved past the JSON | reads past the JSON | `error.OutOfBounds` | `refusal: writing extras whose offsets lie outside the JSON` |
 | `write` and `writeFile` of extras without `data` whose JSON range holds a NUL, as JSON a caller changed after parsing may (jsmn stops at a NUL): cgltf's `%.*s` stops at the NUL while its size counts the whole range, so its cursor moves past bytes it never wrote, and the extras' JSON can be left unclosed | writes text that disagrees with its size | `error.InvalidExtras`, from `writeFile` before the file is created | `refusal: writing extras whose JSON holds a NUL` |
+| `write` and `writeFile` of extras whose `data`, as a caller may set it, holds a NUL before its end: cgltf's `%s` stops at the NUL, which can leave the extras' JSON unclosed | writes text cut at the NUL | `error.InvalidExtras`, from `writeFile` before the file is created | `refusal: writing extras whose data holds a NUL` |
 | `write` into an output too small for the text: cgltf's cursor moves past the end, and its next `snprintf` writes there | writes past the output | `error.WriteFailed`, as from any full `std.Io.Writer` | `refusal: writing into an output too small for the text` |
 
 `bufferViewData` of a view whose offset lies past its buffer's memory is also

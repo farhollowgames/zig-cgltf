@@ -13,8 +13,8 @@ const Gltf = cgltf.Gltf;
 const invalid_index = types.invalid_index;
 
 /// A failed write; extras whose offsets lie outside the JSON text, which
-/// cgltf would read past; or extras whose JSON holds a NUL, which cgltf
-/// cuts there while counting the whole range.
+/// cgltf would read past; or extras whose data or JSON holds a NUL, which
+/// cgltf cuts there, leaving the extras' JSON unclosed.
 pub const WriteError = Io.Writer.Error || error{ OutOfBounds, InvalidExtras };
 
 /// `writeFile`'s errors: a file that cannot be created, a failed write, and
@@ -481,8 +481,9 @@ const Context = struct {
 
     fn writeExtras(c: *Context, extras: *const types.Extras) WriteError!void {
         if (extras.data) |data| {
+            if (std.mem.indexOfScalar(u8, data, 0) != null) return error.InvalidExtras;
             try c.label("extras");
-            try c.out.writeAll(cString(data));
+            try c.out.writeAll(data);
             c.needs_comma = true;
             return;
         }

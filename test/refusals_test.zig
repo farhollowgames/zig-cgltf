@@ -192,6 +192,25 @@ test "refusal: writing extras whose JSON holds a NUL" {
     try cgltf.write(&gltf, &out.writer);
 }
 
+test "refusal: writing extras whose data holds a NUL" {
+    // cgltf's `%s` stops at the NUL, which can leave the extras' JSON
+    // unclosed.
+    var gltf = try cgltf.parse(testing.allocator, "{\"asset\":{\"version\":\"2.0\"}}", .{});
+    defer gltf.deinit();
+    var data = "{\"a\":\"bcd\"}".*;
+    gltf.extras.data = &data;
+    var out: std.Io.Writer.Discarding = .init(&.{});
+    try cgltf.write(&gltf, &out.writer);
+    data[7] = 0;
+    try testing.expectError(error.InvalidExtras, cgltf.write(&gltf, &out.writer));
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const gpa = testing.allocator;
+    const path = try std.fs.path.join(gpa, &.{ ".zig-cache", "tmp", &tmp.sub_path, "a.gltf" });
+    defer gpa.free(path);
+    try testing.expectError(error.InvalidExtras, cgltf.writeFile(&gltf, testing.io, path, .gltf));
+}
+
 test "refusal: writing into an output too small for the text" {
     // cgltf's snprintf calls move past a short buffer's end, and the next
     // call writes past it.

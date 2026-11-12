@@ -6,11 +6,11 @@ Done: `cgltf_write.h` ported on branch `port/writer` (from `review/perf-and-skep
 through the port steps: inventory, oracle tests, benchmark, performance pass, skeptic and
 fixes. Release (step 8) waits for the author.
 
-Tests: `zig build test` runs 66, all passing in ReleaseSafe: 16 unit tests, 35 oracle tests
-and 15 tests of refusals, failed allocations and a custom reader. New for the writer: every
+Tests: `zig build test` runs 67, all passing in ReleaseSafe: 16 unit tests, 35 oracle tests
+and 16 tests of refusals, failed allocations and a custom reader. New for the writer: every
 sample model's text, glTF file and GLB file compared byte for byte with cgltf's, the text
 parsed again by both, 3,000 generated documents written and compared, extras on every
-object, a padded BIN chunk, the bytes past the text in a fixed output, three refusals, and
+object, a padded BIN chunk, the bytes past the text in a fixed output, four refusals, and
 `formatFloat` against glibc's `%.9g` (220,000 random floats; a probe outside the tests
 compared every positive finite float).
 
@@ -27,7 +27,9 @@ a NUL, which cgltf cuts at the NUL while counting the whole range, were cut by t
 
 The author's answers: `writeFile` keeps returning `IoError` on a failed write, documented as a
 deliberate difference; extras whose JSON holds a NUL are refused with `error.InvalidExtras`
-(test `refusal: writing extras whose JSON holds a NUL`, failing first), and `writeFile` now
+(test `refusal: writing extras whose JSON holds a NUL`, failing first), and so are extras
+whose `data` holds one (test `refusal: writing extras whose data holds a NUL`, failing
+first), since cgltf's `%s` cuts them there too; `writeFile` now
 counts the JSON before it creates the file, so a refused write leaves the path untouched.
 
 Open: the step-4 and step-7 points below. The build prints a "failed command" line for the
@@ -183,7 +185,7 @@ The tests the tables name, by short name:
 | write-extras | `write: extras on every object write as the original writes them` |
 | write-output | `write: the output's bytes past the text are left as the original leaves them` |
 | write-fuzz | `fuzz: random glTF documents write as the original writes them, and parse again` |
-| write-refusals | the three `refusal: writing` tests |
+| write-refusals | the four `refusal: writing` tests |
 | write-unit | the unit tests in `src/write.zig` |
 | floats | the two `numbers:` tests of `%.9g`, and `formatFloat prints nine significant digits as glibc's %.9g` |
 
