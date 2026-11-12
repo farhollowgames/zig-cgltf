@@ -82,9 +82,10 @@ Written to resume from: the next agent reads this section and `git log`.
   are still stepped one byte at a time.
 - Steps 6 and 7 (skeptic, fixes): not started.
 
-Next steps, in order: on `review/perf-and-skeptic`, a fresh skeptic's review; fixes with tests that fail before them; the oracle's `OutOfBounds` gap above; the
-test suite and a three-round benchmark again; README, `doc/BENCHMARKS.md` and this file
-updated with the new numbers.
+Next steps, in order: on `review/perf-and-skeptic`, a fresh skeptic's review; fixes with
+tests that fail before them; the oracle's `OutOfBounds` gap above; the test suite and a
+three-round benchmark again; README, `doc/BENCHMARKS.md` and this file updated with the new
+numbers.
 
 ## Tests
 
