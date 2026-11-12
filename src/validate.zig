@@ -30,15 +30,37 @@ fn indexBound(
     const length = std.math.mul(usize, count, size) catch return error.OutOfBounds;
     if (start > memory.len or length > memory.len - start) return error.OutOfBounds;
     const bytes = memory[start..][0..length];
-    var bound: usize = 0;
+    return switch (size) {
+        1 => maxOf(u8, bytes),
+        2 => maxOf(u16, bytes),
+        else => maxOf(u32, bytes),
+    };
+}
+
+/// The largest of the native-endian `T`s that fill `bytes`, 0 for none.
+/// Zig 0.17 leaves a loop over a runtime length scalar, so the lanes are
+/// written out: four 64-byte vectors at a time, then one, then the rest.
+/// The vectors load through pointers, since a `@bitCast` of a byte array
+/// to a vector compiles to scalar shifts.
+fn maxOf(comptime T: type, bytes: []const u8) usize {
+    const lanes = 64 / @sizeOf(T);
+    const V = @Vector(lanes, T);
+    const vector_bytes = lanes * @sizeOf(T);
+    var acc: [4]V = @splat(@splat(0));
     var at: usize = 0;
-    while (at < length) : (at += size) {
-        const value: usize = switch (size) {
-            1 => bytes[at],
-            2 => std.mem.readInt(u16, bytes[at..][0..2], .native),
-            else => std.mem.readInt(u32, bytes[at..][0..4], .native),
-        };
-        bound = @max(bound, value);
+    while (at + 4 * vector_bytes <= bytes.len) : (at += 4 * vector_bytes) {
+        inline for (&acc, 0..) |*a, k| {
+            const chunk: *align(1) const V = @ptrCast(bytes[at + k * vector_bytes ..]);
+            a.* = @max(a.*, chunk.*);
+        }
+    }
+    while (at + vector_bytes <= bytes.len) : (at += vector_bytes) {
+        const chunk: *align(1) const V = @ptrCast(bytes[at..]);
+        acc[0] = @max(acc[0], chunk.*);
+    }
+    var bound: T = @reduce(.Max, @max(@max(acc[0], acc[1]), @max(acc[2], acc[3])));
+    while (at < bytes.len) : (at += @sizeOf(T)) {
+        bound = @max(bound, std.mem.readInt(T, bytes[at..][0..@sizeOf(T)], .native));
     }
     return bound;
 }

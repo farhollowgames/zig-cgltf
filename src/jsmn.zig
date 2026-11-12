@@ -86,10 +86,30 @@ fn parsePrimitive(parser: *Parser, js: []const u8, tokens: ?[]Token) Error!void 
     parser.pos -= 1;
 }
 
+/// The first position from `pos` on that holds a quote, a backslash or a
+/// NUL, or a position less than a chunk before the end of `js`: what a
+/// string's loop below would step over one byte at a time.
+fn skipStringBytes(js: []const u8, pos: usize) usize {
+    const chunk_len = 64;
+    const Chunk = @Vector(chunk_len, u8);
+    var at = pos;
+    while (at + chunk_len <= js.len) : (at += chunk_len) {
+        const chunk: *align(1) const Chunk = @ptrCast(js[at..]);
+        const quotes: u64 = @bitCast(chunk.* == @as(Chunk, @splat('"')));
+        const backslashes: u64 = @bitCast(chunk.* == @as(Chunk, @splat('\\')));
+        const nuls: u64 = @bitCast(chunk.* == @as(Chunk, @splat(0)));
+        const stops = quotes | backslashes | nuls;
+        if (stops != 0) return at + @ctz(stops);
+    }
+    return at;
+}
+
 fn parseString(parser: *Parser, js: []const u8, tokens: ?[]Token) Error!void {
     const start = parser.pos;
     parser.pos += 1;
-    while (parser.pos < js.len and js[parser.pos] != 0) : (parser.pos += 1) {
+    while (true) : (parser.pos += 1) {
+        parser.pos = skipStringBytes(js, parser.pos);
+        if (parser.pos >= js.len or js[parser.pos] == 0) break;
         const c = js[parser.pos];
         if (c == '"') {
             const all = tokens orelse return;
@@ -241,4 +261,40 @@ test "jsmn rejects what strict mode rejects" {
     try testing.expectError(error.Part, parse(&parser, "[1", &tokens));
     parser = .{};
     try testing.expectError(error.Part, parse(&parser, "5", &tokens));
+}
+
+test "jsmn finds a string's end, escapes and NUL at every position of long strings" {
+    var text: [300]u8 = undefined;
+    var tokens: [4]Token = undefined;
+    for (0..200) |at| {
+        // An escape at `at`, then a quote 40 bytes on.
+        @memset(&text, 'a');
+        text[0] = '[';
+        text[1] = '"';
+        text[2 + at] = '\\';
+        text[3 + at] = 'n';
+        text[44 + at] = '"';
+        text[45 + at] = ']';
+        var parser: Parser = .{};
+        try testing.expectEqual(@as(usize, 2), try parse(&parser, text[0 .. 46 + at], &tokens));
+        try testing.expectEqual(@as(isize, 2), tokens[1].start);
+        try testing.expectEqual(@as(isize, @intCast(44 + at)), tokens[1].end);
+
+        // An escape strict mode refuses.
+        text[3 + at] = 'q';
+        parser = .{};
+        try testing.expectError(error.Inval, parse(&parser, text[0 .. 46 + at], &tokens));
+
+        // A NUL ends the text inside the string.
+        text[2 + at] = 0;
+        parser = .{};
+        try testing.expectError(error.Part, parse(&parser, text[0 .. 46 + at], &tokens));
+
+        // An escaped quote does not end it, and the text's end does.
+        text[2 + at] = '\\';
+        text[3 + at] = '"';
+        text[44 + at] = 'a';
+        parser = .{};
+        try testing.expectError(error.Part, parse(&parser, text[0 .. 46 + at], &tokens));
+    }
 }

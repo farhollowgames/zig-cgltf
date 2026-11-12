@@ -26,6 +26,17 @@ pub fn bufferViewData(gltf: *const Gltf, view_index: u32) ReadError!?[]const u8 
     return data[view.offset..];
 }
 
+/// The memory a view's elements are read from, as `bufferViewData` gives
+/// it, except that a view starting past the end of its buffer's memory
+/// gives an empty slice: reading nothing there succeeds, as in cgltf, and
+/// reading anything is `error.OutOfBounds`.
+fn viewData(gltf: *const Gltf, view_index: u32) ?[]const u8 {
+    const view = &gltf.buffer_views[view_index];
+    if (view.data) |data| return data;
+    const data = gltf.buffers[view.buffer].data orelse return null;
+    return data[@min(view.offset, data.len)..];
+}
+
 /// cgltf's `cgltf_find_accessor`: the accessor of the primitive's first
 /// attribute of `attribute_type` with set number `index`.
 pub fn findAccessor(primitive: *const types.Primitive, attribute_type: types.AttributeType, index: i32) ?u32 {
@@ -58,29 +69,63 @@ fn componentReadIndex(bytes: []const u8, component_type: ComponentType) usize {
     };
 }
 
-fn componentReadInteger(bytes: []const u8, component_type: ComponentType) i64 {
+/// The integer type a component is stored as; a float is read as its bits.
+fn Stored(comptime component_type: ComponentType) type {
     return switch (component_type) {
-        .r_16 => readInt(i16, bytes),
-        .r_16u => readInt(u16, bytes),
-        .r_32u => readInt(u32, bytes),
-        .r_8 => @as(i8, @bitCast(bytes[0])),
-        .r_8u => bytes[0],
-        else => 0,
+        .r_8 => i8,
+        .r_8u, .invalid => u8,
+        .r_16 => i16,
+        .r_16u => u16,
+        .r_32u, .r_32f => u32,
     };
 }
 
-fn componentReadFloat(bytes: []const u8, component_type: ComponentType, normalized: bool) f32 {
-    if (component_type == .r_32f) return @bitCast(readInt(u32, bytes));
-    if (normalized) {
-        return switch (component_type) {
-            .r_16 => @as(f32, @floatFromInt(readInt(i16, bytes))) / 32767.0,
-            .r_16u => @as(f32, @floatFromInt(readInt(u16, bytes))) / 65535.0,
-            .r_8 => @as(f32, @floatFromInt(@as(i8, @bitCast(bytes[0])))) / 127.0,
-            .r_8u => @as(f32, @floatFromInt(bytes[0])) / 255.0,
-            else => 0,
-        };
+/// cgltf's `cgltf_component_read_float` of components already read: a
+/// float as it is, a normalized integer scaled to [0, 1] or [-1, 1], 0
+/// for a type it does not read, and any other integer converted.
+fn toFloats(
+    comptime component_type: ComponentType,
+    comptime normalized: bool,
+    comptime lanes: usize,
+    stored: @Vector(lanes, Stored(component_type)),
+) @Vector(lanes, f32) {
+    const Floats = @Vector(lanes, f32);
+    if (component_type == .invalid) return @splat(0);
+    if (component_type == .r_32f) return @bitCast(stored);
+    const floats: Floats = @floatFromInt(stored);
+    if (!normalized) return floats;
+    const scale: f32 = switch (component_type) {
+        .r_16 => 32767,
+        .r_16u => 65535,
+        .r_8 => 127,
+        .r_8u => 255,
+        else => return @splat(0),
+    };
+    return floats / @as(Floats, @splat(scale));
+}
+
+/// One element of type `t` from `bytes`, which hold its whole span, as
+/// cgltf's `cgltf_element_read_float` reads it.
+fn readElementFloats(
+    comptime component_type: ComponentType,
+    comptime normalized: bool,
+    comptime t: types.Type,
+    bytes: []const u8,
+    out: *[cgltf.numComponents(t)]f32,
+) void {
+    const T = Stored(component_type);
+    const n = comptime cgltf.numComponents(t);
+    if (component_type == .invalid) {
+        out.* = @splat(0);
+        return;
     }
-    return @floatFromInt(componentReadInteger(bytes, component_type));
+    const offsets = comptime componentOffsets(t, @sizeOf(T));
+    var stored: @Vector(n, T) = undefined;
+    inline for (0..n) |i| {
+        const at = if (offsets.len > 0) offsets[i] else @sizeOf(T) * i;
+        stored[i] = readInt(T, bytes[at..]);
+    }
+    out.* = toFloats(component_type, normalized, n, stored);
 }
 
 fn componentReadUint(bytes: []const u8, component_type: ComponentType) u32 {
@@ -120,15 +165,28 @@ fn indexSize(component_type: ComponentType) usize {
 }
 
 /// cgltf's `cgltf_element_read_float`, the element at `offset` in `memory`.
-fn elementReadFloat(memory: []const u8, offset: usize, accessor: *const Accessor, out: []f32) ReadError!bool {
+/// Inline, so that a caller's loop over one accessor's elements can choose
+/// the component and element type once, outside the loop.
+inline fn elementReadFloat(
+    memory: []const u8,
+    offset: usize,
+    accessor: *const Accessor,
+    out: []f32,
+) ReadError!bool {
     const num_components = cgltf.numComponents(accessor.type);
     if (out.len < num_components) return false;
     const bytes = try bytesAt(memory, offset, elementSpan(accessor.type, accessor.component_type));
-    const component_size = cgltf.componentSize(accessor.component_type);
-    const offsets = componentOffsets(accessor.type, component_size);
-    for (out[0..num_components], 0..) |*value, i| {
-        const at = if (offsets.len > 0) offsets[i] else component_size * i;
-        value.* = componentReadFloat(bytes[at..], accessor.component_type, accessor.normalized);
+    switch (accessor.component_type) {
+        inline else => |component_type| switch (accessor.type) {
+            inline else => |t| {
+                const dest = out[0..comptime cgltf.numComponents(t)];
+                if (accessor.normalized) {
+                    readElementFloats(component_type, true, t, bytes, dest);
+                } else {
+                    readElementFloats(component_type, false, t, bytes, dest);
+                }
+            },
+        },
     }
     return true;
 }
@@ -154,8 +212,8 @@ const Element = struct { memory: []const u8, offset: usize };
 /// element at `needle`, found by binary search over the sorted indices.
 fn findSparseIndex(gltf: *const Gltf, accessor: *const Accessor, needle: usize) ReadError!?Element {
     const sparse = &accessor.sparse;
-    const index_data = try bufferViewData(gltf, sparse.indices_buffer_view.?) orelse return null;
-    const value_data = try bufferViewData(gltf, sparse.values_buffer_view.?) orelse return null;
+    const index_data = viewData(gltf, sparse.indices_buffer_view.?) orelse return null;
+    const value_data = viewData(gltf, sparse.values_buffer_view.?) orelse return null;
     const index_stride = cgltf.componentSize(sparse.indices_component_type);
     const index_size = indexSize(sparse.indices_component_type);
     var offset: usize = 0;
@@ -188,7 +246,7 @@ pub fn readFloat(gltf: *const Gltf, accessor: *const Accessor, index: usize, out
         @memset(out, 0);
         return true;
     };
-    const memory = try bufferViewData(gltf, view) orelse return false;
+    const memory = viewData(gltf, view) orelse return false;
     return elementReadFloat(memory, accessor.offset +% accessor.stride *% index, accessor, out);
 }
 
@@ -205,7 +263,7 @@ pub fn readUint(gltf: *const Gltf, accessor: *const Accessor, index: usize, out:
         @memset(out, 0);
         return true;
     };
-    const memory = try bufferViewData(gltf, view) orelse return false;
+    const memory = viewData(gltf, view) orelse return false;
     return elementReadUint(memory, accessor.offset +% accessor.stride *% index, accessor, out);
 }
 
@@ -220,9 +278,79 @@ pub fn readIndex(gltf: *const Gltf, accessor: *const Accessor, index: usize) Rea
         }
     }
     const view = accessor.buffer_view orelse return 0;
-    const memory = try bufferViewData(gltf, view) orelse return 0;
+    const memory = viewData(gltf, view) orelse return 0;
     const bytes = try bytesAt(memory, accessor.offset +% accessor.stride *% index, size);
     return componentReadIndex(bytes, accessor.component_type);
+}
+
+/// Whether `span` bytes of each of the first `count` elements of
+/// `accessor` lie in `memory_len` bytes from its offset on, with no offset
+/// wrapping, so that reading them needs no check of its own.
+fn elementsFit(memory_len: usize, accessor: *const Accessor, count: usize, span: usize) bool {
+    const last = std.math.mul(usize, accessor.stride, count -| 1) catch return false;
+    const start = std.math.add(usize, accessor.offset, last) catch return false;
+    return start <= memory_len and span <= memory_len - start;
+}
+
+/// `out.len` components from `bytes`, packed with no stride or padding.
+fn convertRun(
+    comptime component_type: ComponentType,
+    comptime normalized: bool,
+    bytes: []const u8,
+    out: []f32,
+) void {
+    const T = Stored(component_type);
+    const lanes = 16;
+    var i: usize = 0;
+    while (i + lanes <= out.len) : (i += lanes) {
+        const stored: *align(1) const @Vector(lanes, T) = @ptrCast(bytes[i * @sizeOf(T) ..]);
+        out[i..][0..lanes].* = toFloats(component_type, normalized, lanes, stored.*);
+    }
+    while (i < out.len) : (i += 1) {
+        const stored: @Vector(1, T) = .{readInt(T, bytes[i * @sizeOf(T) ..])};
+        out[i] = toFloats(component_type, normalized, 1, stored)[0];
+    }
+}
+
+/// The elements of `accessor` that fill `out`, from `memory`, where
+/// `elementsFit` has checked they lie.
+fn unpackElementFloats(accessor: *const Accessor, memory: []const u8, out: []f32) void {
+    switch (accessor.component_type) {
+        inline else => |component_type| if (accessor.normalized) {
+            unpackElementsAs(component_type, true, accessor, memory, out);
+        } else {
+            unpackElementsAs(component_type, false, accessor, memory, out);
+        },
+    }
+}
+
+fn unpackElementsAs(
+    comptime component_type: ComponentType,
+    comptime normalized: bool,
+    accessor: *const Accessor,
+    memory: []const u8,
+    out: []f32,
+) void {
+    const component_size = @sizeOf(Stored(component_type));
+    const packed_stride = cgltf.numComponents(accessor.type) * component_size;
+    if (component_type != .invalid and accessor.stride == packed_stride and
+        componentOffsets(accessor.type, component_size).len == 0)
+    {
+        const bytes = memory[accessor.offset..][0 .. out.len * component_size];
+        convertRun(component_type, normalized, bytes, out);
+        return;
+    }
+    switch (accessor.type) {
+        inline else => |t| {
+            const n = comptime cgltf.numComponents(t);
+            var offset = accessor.offset;
+            var at: usize = 0;
+            while (at < out.len) : (at += n) {
+                readElementFloats(component_type, normalized, t, memory[offset..], out[at..][0..n]);
+                offset +%= accessor.stride;
+            }
+        },
+    }
 }
 
 /// The floats `unpackFloats` can write: every component of every element.
@@ -242,10 +370,13 @@ pub fn unpackFloats(gltf: *const Gltf, accessor: *const Accessor, out: []f32) Re
     const used = out[0 .. element_count * floats_per_element];
 
     if (accessor.buffer_view) |view| {
-        const memory = try bufferViewData(gltf, view) orelse return 0;
+        const memory = viewData(gltf, view) orelse return 0;
+        const span = elementSpan(accessor.type, accessor.component_type);
         if (accessor.component_type == .r_32f and accessor.stride == floats_per_element * 4) {
             const bytes = try bytesAt(memory, accessor.offset, used.len * 4);
             @memcpy(std.mem.sliceAsBytes(used), bytes);
+        } else if (used.len > 0 and elementsFit(memory.len, accessor, element_count, span)) {
+            unpackElementFloats(accessor, memory, used);
         } else {
             var offset = accessor.offset;
             var at: usize = 0;
@@ -261,8 +392,8 @@ pub fn unpackFloats(gltf: *const Gltf, accessor: *const Accessor, out: []f32) Re
 
     if (accessor.is_sparse) {
         const sparse = &accessor.sparse;
-        const index_data = try bufferViewData(gltf, sparse.indices_buffer_view.?) orelse return 0;
-        const value_data = try bufferViewData(gltf, sparse.values_buffer_view.?) orelse return 0;
+        const index_data = viewData(gltf, sparse.indices_buffer_view.?) orelse return 0;
+        const value_data = viewData(gltf, sparse.values_buffer_view.?) orelse return 0;
         const index_stride = cgltf.componentSize(sparse.indices_component_type);
         const index_size = indexSize(sparse.indices_component_type);
         var index_offset = sparse.indices_byte_offset;
@@ -309,7 +440,7 @@ pub fn unpackIndices(
     if (accessor.is_sparse) return 0;
     const view = accessor.buffer_view orelse return 0;
     if (index_component_size > out_component_size) return 0;
-    const memory = try bufferViewData(gltf, view) orelse return 0;
+    const memory = viewData(gltf, view) orelse return 0;
 
     if (index_component_size == out_component_size and
         accessor.stride == out_component_size * numbers_per_element)
@@ -319,6 +450,19 @@ pub fn unpackIndices(
         return index_count;
     }
     const size = indexSize(accessor.component_type);
+    if (size > 0 and index_count > 0 and elementsFit(memory.len, accessor, index_count, size)) {
+        switch (accessor.component_type) {
+            inline .r_8u, .r_16u, .r_32u => |component_type| {
+                const S = Stored(component_type);
+                // Wider indices than `T` returned 0 above.
+                if (@sizeOf(S) > @sizeOf(T)) unreachable;
+                unpackIndicesAs(T, S, memory, accessor, out[0..index_count]);
+            },
+            // `indexSize` is 0 for every other type.
+            else => unreachable,
+        }
+        return index_count;
+    }
     var offset = accessor.offset;
     for (out[0..index_count]) |*value| {
         const bytes = try bytesAt(memory, offset, size);
@@ -326,4 +470,29 @@ pub fn unpackIndices(
         offset +%= accessor.stride;
     }
     return index_count;
+}
+
+/// The indices that fill `out`, stored as `S`, from `memory`, where
+/// `elementsFit` has checked they lie.
+fn unpackIndicesAs(
+    comptime T: type,
+    comptime S: type,
+    memory: []const u8,
+    accessor: *const Accessor,
+    out: []T,
+) void {
+    var offset = accessor.offset;
+    var i: usize = 0;
+    if (accessor.stride == @sizeOf(S)) {
+        const lanes = 16;
+        while (i + lanes <= out.len) : (i += lanes) {
+            const stored: *align(1) const @Vector(lanes, S) = @ptrCast(memory[offset..]);
+            out[i..][0..lanes].* = @as(@Vector(lanes, T), stored.*);
+            offset += lanes * @sizeOf(S);
+        }
+    }
+    while (i < out.len) : (i += 1) {
+        out[i] = readInt(S, memory[offset..]);
+        offset +%= accessor.stride;
+    }
 }

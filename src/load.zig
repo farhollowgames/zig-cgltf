@@ -50,6 +50,67 @@ fn base64Index(c: u8) ?u6 {
     };
 }
 
+const base64_chunk_chars = 64;
+const base64_chunk_bytes = base64_chunk_chars / 4 * 3;
+const Chars = @Vector(base64_chunk_chars, u8);
+const Sextets = @Vector(base64_chunk_chars / 4, u8);
+
+/// Every fourth lane of a chunk's characters, from lane `first`.
+fn quadLanes(comptime first: usize) [base64_chunk_chars / 4]i32 {
+    var mask: [base64_chunk_chars / 4]i32 = undefined;
+    for (&mask, 0..) |*lane, i| lane.* = @intCast(4 * i + first);
+    return mask;
+}
+
+/// Lane i of the first vector, then lane i of the second, for each i.
+fn pairLanes() [base64_chunk_chars / 2]i32 {
+    var mask: [base64_chunk_chars / 2]i32 = undefined;
+    for (0..base64_chunk_chars / 4) |i| {
+        mask[2 * i] = @intCast(i);
+        mask[2 * i + 1] = ~@as(i32, @intCast(i));
+    }
+    return mask;
+}
+
+/// Lanes 2i and 2i + 1 of the first vector, then lane i of the second.
+fn tripleLanes() [base64_chunk_bytes]i32 {
+    var mask: [base64_chunk_bytes]i32 = undefined;
+    for (0..base64_chunk_chars / 4) |i| {
+        mask[3 * i] = @intCast(2 * i);
+        mask[3 * i + 1] = @intCast(2 * i + 1);
+        mask[3 * i + 2] = ~@as(i32, @intCast(i));
+    }
+    return mask;
+}
+
+/// Decodes a chunk of base64 characters into `out`, or returns false,
+/// writing nothing, when one is outside the alphabet. Zig 0.17 leaves a
+/// loop over a runtime length scalar, so the lanes are written out.
+fn decodeBase64Chunk(text: *const [base64_chunk_chars]u8, out: *[base64_chunk_bytes]u8) bool {
+    const c: Chars = text.*;
+    const upper = c -% @as(Chars, @splat('A')) < @as(Chars, @splat(26));
+    const lower = c -% @as(Chars, @splat('a')) < @as(Chars, @splat(26));
+    const digit = c -% @as(Chars, @splat('0')) < @as(Chars, @splat(10));
+    const plus = c == @as(Chars, @splat('+'));
+    const slash = c == @as(Chars, @splat('/'));
+    if (@reduce(.Or, ~(upper | lower | digit | plus | slash))) return false;
+    var index = c -% @as(Chars, @splat('A'));
+    index = @select(u8, lower, c -% @as(Chars, @splat('a' - 26)), index);
+    index = @select(u8, digit, c +% @as(Chars, @splat(52 -% '0')), index);
+    index = @select(u8, plus, @as(Chars, @splat(62)), index);
+    index = @select(u8, slash, @as(Chars, @splat(63)), index);
+    const s0: Sextets = @shuffle(u8, index, undefined, quadLanes(0));
+    const s1: Sextets = @shuffle(u8, index, undefined, quadLanes(1));
+    const s2: Sextets = @shuffle(u8, index, undefined, quadLanes(2));
+    const s3: Sextets = @shuffle(u8, index, undefined, quadLanes(3));
+    const byte0 = s0 << @splat(2) | s1 >> @splat(4);
+    const byte1 = s1 << @splat(4) | s2 >> @splat(2);
+    const byte2 = s2 << @splat(6) | s3;
+    const bytes01 = @shuffle(u8, byte0, byte1, pairLanes());
+    out.* = @shuffle(u8, bytes01, byte2, tripleLanes());
+    return true;
+}
+
 /// cgltf's `cgltf_load_buffer_base64`: the first `size` bytes `base64`
 /// encodes, in memory from `gpa`. The text ends at its end or at a NUL;
 /// any character outside the base64 alphabet before `size` bytes, `=`
@@ -57,10 +118,20 @@ fn base64Index(c: u8) ?u6 {
 pub fn loadBufferBase64(gpa: Allocator, size: usize, base64: []const u8) Error![]u8 {
     const data = try gpa.alloc(u8, size);
     errdefer gpa.free(data);
+    // Whole chunks first: four characters make three bytes, so a chunk
+    // ends where the bit buffer below is empty. A chunk with a character
+    // outside the alphabet is left to the loop below, which refuses it.
+    var next: usize = 0;
+    var written: usize = 0;
+    while (written + base64_chunk_bytes <= size and next + base64_chunk_chars <= base64.len) {
+        const text = base64[next..][0..base64_chunk_chars];
+        if (!decodeBase64Chunk(text, data[written..][0..base64_chunk_bytes])) break;
+        next += base64_chunk_chars;
+        written += base64_chunk_bytes;
+    }
     var buffer: u32 = 0;
     var buffer_bits: u5 = 0;
-    var next: usize = 0;
-    for (data) |*byte| {
+    for (data[written..]) |*byte| {
         while (buffer_bits < 8) {
             const c = if (next < base64.len) base64[next] else 0;
             next += 1;
@@ -84,22 +155,26 @@ fn unhex(c: u8) i32 {
 }
 
 /// cgltf's `cgltf_decode_string`: decodes the JSON escapes of `string` in
-/// place, writes a NUL after the result and returns its length. An escape
-/// cut off by the end of the string is `error.OutOfBounds`: cgltf reads
-/// past the end there. A `\u` escape with other characters than hex
+/// place, up to its first NUL, and returns the decoded text, with a NUL
+/// written after it. The decoded text is shorter than `string` when there
+/// were escapes, so a slice kept from before, such as a name in a `Gltf`,
+/// keeps its old length: take the returned slice in its place. An escape
+/// that runs past the NUL at `string.len` is `error.OutOfBounds`: cgltf
+/// reads past the end there. A `\u` escape with other characters than hex
 /// digits decodes as cgltf decodes it, from their value of -1.
-pub fn decodeString(string: [:0]u8) Error!usize {
+pub fn decodeString(string: [:0]u8) Error![:0]u8 {
     const len = string.len;
-    var read = std.mem.indexOfScalar(u8, string, '\\') orelse return len;
+    var read = try spanToEscape(string, 0);
+    if (string[read] == 0) return string[0..read :0];
     var write: usize = 0;
     var last: usize = 0;
     while (true) {
         const written = read - last;
         std.mem.copyForwards(u8, string[write..][0..written], string[last..read]);
         write += written;
-        if (read == len) break;
+        if (string[read] == 0) break;
+        // `read` was at a backslash, before the NUL at `len`.
         read += 1;
-        if (read == len) return error.OutOfBounds;
         const escape = string[read];
         read += 1;
         switch (escape) {
@@ -118,12 +193,13 @@ pub fn decodeString(string: [:0]u8) Error!usize {
                 write += 1;
             },
             'u' => {
-                if (len - read < 4) return error.OutOfBounds;
+                // The four characters may include the NUL at `len`.
+                if (read + 4 > len + 1) return error.OutOfBounds;
                 var character: i32 = 0;
-                for (string[read..][0..4]) |c| {
+                for (0..4) |i| {
                     // C shifts a negative int here; two's complement as
                     // every compiler does it.
-                    character = (character << 4) +% unhex(c);
+                    character = (character << 4) +% unhex(string.ptr[read + i]);
                 }
                 read += 4;
                 const bits: u32 = @bitCast(character);
@@ -144,10 +220,20 @@ pub fn decodeString(string: [:0]u8) Error!usize {
             else => {},
         }
         last = read;
-        read += std.mem.indexOfScalar(u8, string[read..], '\\') orelse len - read;
+        read = try spanToEscape(string, read);
     }
     string[write] = 0;
-    return write;
+    return string[0..write :0];
+}
+
+/// C's `strcspn(string + from, "\\")` as an index: the first backslash or
+/// NUL from `from` on. `from` may be the NUL at `string.len`, not past it.
+fn spanToEscape(string: [:0]const u8, from: usize) Error!usize {
+    if (from > string.len) return error.OutOfBounds;
+    for (string.ptr[from .. string.len + 1], from..) |c, i| {
+        if (c == '\\' or c == 0) return i;
+    }
+    unreachable;
 }
 
 /// cgltf's `cgltf_decode_uri`: decodes `%XX` escapes of `uri` in place,
@@ -177,7 +263,8 @@ pub fn decodeUri(uri: [:0]u8) usize {
 }
 
 /// The path of `uri` beside `gltf_path`, in `memory`: everything up to
-/// its last `/` or `\`, then the URI with its `%XX` escapes decoded.
+/// its last `/` or `\`, then the URI with its `%XX` escapes decoded, up
+/// to the first NUL they give.
 /// `memory` is `pathSize` bytes.
 fn combinePaths(memory: []u8, gltf_path: []const u8, uri: []const u8) []const u8 {
     const slash = std.mem.lastIndexOfAny(u8, gltf_path, "/\\");
@@ -186,7 +273,9 @@ fn combinePaths(memory: []u8, gltf_path: []const u8, uri: []const u8) []const u8
     @memcpy(memory[prefix..][0..uri.len], uri);
     memory[prefix + uri.len] = 0;
     const decoded = decodeUri(memory[prefix .. prefix + uri.len :0]);
-    return memory[0 .. prefix + decoded];
+    // A `%00` ends the path, as the NUL ends cgltf's C string.
+    const path = memory[0 .. prefix + decoded];
+    return path[0 .. std.mem.indexOfScalar(u8, path, 0) orelse path.len];
 }
 
 fn pathSize(gltf_path: []const u8, uri: []const u8) usize {
@@ -245,10 +334,38 @@ test "base64 decodes and stops at the end of the text" {
     try testing.expectError(error.IoError, loadBufferBase64(testing.allocator, 9, "aGVsbG8"));
 }
 
+test "base64 over whole chunks decodes, and refuses a bad character only where it reads one" {
+    var prng = std.Random.DefaultPrng.init(0x6261_7365_3634);
+    const random = prng.random();
+    var raw: [300]u8 = undefined;
+    var text: [400]u8 = undefined;
+    for (0..2000) |_| {
+        const raw_len = random.uintLessThan(usize, raw.len + 1);
+        random.bytes(raw[0..raw_len]);
+        const encoded = std.base64.standard.Encoder.encode(&text, raw[0..raw_len]);
+        const size = random.uintLessThan(usize, raw_len + 1);
+        const data = try loadBufferBase64(testing.allocator, size, encoded);
+        try testing.expectEqualSlices(u8, raw[0..size], data);
+        testing.allocator.free(data);
+
+        if (encoded.len == 0) continue;
+        const bad = random.uintLessThan(usize, encoded.len);
+        text[bad] = if (random.boolean()) '=' else 0;
+        const chars_read = std.math.divCeil(usize, size * 8, 6) catch unreachable;
+        if (bad < chars_read) {
+            const refused = loadBufferBase64(testing.allocator, size, encoded);
+            try testing.expectError(error.IoError, refused);
+        } else {
+            const rest = try loadBufferBase64(testing.allocator, size, encoded);
+            try testing.expectEqualSlices(u8, raw[0..size], rest);
+            testing.allocator.free(rest);
+        }
+    }
+}
+
 test "decodeString decodes escapes and refuses a cut one" {
     var text = "a\\n\\u00e9\\\"b".*;
-    const n = try decodeString(&text);
-    try testing.expectEqualStrings("a\n\xc3\xa9\"b", text[0..n]);
+    try testing.expectEqualStrings("a\n\xc3\xa9\"b", try decodeString(&text));
     var cut = "ab\\".*;
     try testing.expectError(error.OutOfBounds, decodeString(&cut));
     var short = "\\u12".*;

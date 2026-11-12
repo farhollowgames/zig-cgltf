@@ -131,13 +131,13 @@ Every result code must match: the port's error is mapped to cgltf's `cgltf_resul
 
 One exception to comparing bits: a transform computed from a NaN may keep the NaN of either
 operand of an addition or a product, as the compiler orders them, and neither C nor Zig fixes
-that order. Transforms therefore count any NaN as equal to any NaN; every other float,
-NaN included, is compared as bits.
+that order. Computed transforms therefore count any NaN as equal to any NaN; a node's own
+matrix, which both copy, and every other float, NaN included, are compared as bits.
 
 ### Tests and counts
 
-`zig build test` runs 45 tests: 10 unit tests in `src/` and 35 tests in `test/`, through
-`test/differential.zig`. 23 of the 35 are oracle tests; the other 12 check the port's
+`zig build test` runs 49 tests: 12 unit tests in `src/` and 37 tests in `test/`, through
+`test/differential.zig`. 25 of the 37 are oracle tests; the other 12 check the port's
 refusals, failed allocations and a file reader of the caller's.
 
 | feature | inputs |
@@ -155,12 +155,13 @@ refusals, failed allocations and a file reader of the caller's.
 | validation | views (meshopt compression included), accessors, meshes, morph targets and weights, nodes and animations that break each check |
 | buffers | data URIs of every form cgltf accepts or refuses, other URI schemes, the BIN chunk, files beside the glTF with escaped names, and sizes of 0, short and exact |
 | `number` | `atoi`, `atoll` and `atof` against the C library on hand-picked texts, 20,000 random texts and 20,000 random floats printed and read back |
-| `decodeString`, `decodeUri`, `loadBufferBase64` | hand-picked texts and 20,000 random texts each |
+| `decodeString`, `decodeUri` | hand-picked texts, NUL bytes inside included, and 20,000 random texts; both sides decode in place, and every byte of the buffer is compared; a name from a parsed file decoded on both sides |
+| `loadBufferBase64` | 20,000 random texts of up to 400 characters, mostly valid with a bad character here and there, so the decoder's 64-character chunks are reached |
 | `numComponents`, `componentSize`, `calcSize` | every type and component type |
 
 ### Fuzzing
 
-Two oracle tests fuzz whole files:
+Three oracle tests fuzz whole files:
 
 - **Mutations**: 3,000 cases, each one of the sample models of at most 32 KiB or a file of
   cgltf's own fuzz corpus, changed by random byte edits, insertions from cgltf's AFL
@@ -169,22 +170,31 @@ Two oracle tests fuzz whole files:
 - **Documents**: 4,000 generated glTF documents that use every object, every extension and
   sparse and strided accessors with real buffers. Half keep to the glTF rules, so they get
   through validation and into the helpers; the other half break the rules here and there.
+- **Layouts**: 3,000 files of one buffer of random bytes, two views and one accessor of a
+  random type, component type, normalization, count, stride and offset, sparse one time in
+  three, none of them validated, so the accessor helpers meet every edge of the buffer.
 
 Each test counts how far its cases went, and fails if too few got through validation or
-failed after parsing, so the fuzzing reaches every step. With the recorded seeds, the
-mutations refused 2,580 cases at parsing, and of the rest 15 failed loading, 86 failed
-validation and 319 were valid; the documents refused 1,892, and 19, 1,205 and 884.
+failed after parsing, so the fuzzing reaches every step: at least 250 valid cases for the
+mutations, 600 for the documents and 50 for the layouts, whose helpers run whether or not
+they validate. With the recorded seeds, the mutations refused 2,580 cases at parsing, and of
+the rest 15 failed loading, 86 failed validation and 319 were valid; the documents refused
+1,892, and 19, 1,205 and 884; the layouts refused none, and 2,893 failed validation and 107
+were valid. The floors sit below what other seeds give: seed 13 gave 299 valid mutations.
 
 Every case's seed comes from the test's name and the case's number. `-Dfuzz-seed=N` changes
 every seed, and `-Dfuzz-replay=S` runs only the case with seed `S`, which a failing case
-prints. Seeds 1 to 4 have also been run and passed.
+prints. Seeds 1 to 4, 11, 12 and 13 have also been run and passed.
 
 ### Malformed input
 
 Where cgltf reads or writes out of bounds or never returns, the port returns an error, and
 the oracle does not run cgltf on that call. [`doc/parity.md`](parity.md) lists each case
-with its test. The fuzz tests above check every other malformed input against cgltf's
-result.
+with its test. So that a wrong refusal cannot pass unseen, the oracle works out from cgltf's
+own structs, for each refused call, whether cgltf could read past the memory or write past
+the output there, and fails the test if it could not; a world transform refused for a loop
+must have a loop of parents in cgltf's nodes. The fuzz tests above check every other
+malformed input against cgltf's result.
 
 ### Failed allocations
 

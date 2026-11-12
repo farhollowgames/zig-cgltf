@@ -84,6 +84,8 @@ The reasons are in [`doc/parity.md`](doc/parity.md).
 - References are indices into the `Gltf`'s arrays, not pointers, so there are no `_index`
   functions; a missing optional reference is `null`.
 - `cgltf_data` is `Gltf`, and `cgltf_free` is `Gltf.deinit`.
+- `decodeString` returns the decoded text, since a slice kept from before keeps its old
+  length.
 - Result codes are an error set; functions return their value or an error.
 - An `std.mem.Allocator` in place of the memory callbacks, and a `FileReader` in place of the
   file callbacks.
@@ -99,20 +101,20 @@ The parts of cgltf that are left out, each with its reason, are listed in
 
 ## Testing and benchmarks
 
-`zig build test` runs 45 tests: 10 unit tests and 35 tests that build cgltf from `reference/`.
-Most of the 35 run cgltf and the port on the same inputs (every Khronos sample model,
-hand-made edge cases and 7,000 fuzzed files) and compare every field of the result, every
+`zig build test` runs 49 tests: 12 unit tests and 37 tests that build cgltf from `reference/`.
+Most of the 37 run cgltf and the port on the same inputs (every Khronos sample model,
+hand-made edge cases and 10,000 fuzzed files) and compare every field of the result, every
 string byte, every reference as an index, and every float as bits.
 
 Port time against original time, one thread, over every sample model:
 
 | feature | port vs original |
 | --- | ---: |
-| parse glTF | 18% faster |
-| parse GLB | 6% faster |
-| validate | about 6 times slower |
-| unpack floats | 33% slower |
-| world transforms | 47% faster |
+| parse glTF | 33% faster |
+| parse GLB | 13% faster |
+| validate | 10% slower |
+| unpack floats | about 6 times faster |
+| world transforms | 29% slower |
 
 AMD Ryzen 9 9950X3D, Linux, Zig 0.17.0 (`x86_64` `znver5`), with cgltf built by Zig's clang
 at `-O3`.

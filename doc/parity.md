@@ -25,7 +25,13 @@ on those calls. Each case has a test in `test/refusals_test.zig`.
 
 `bufferViewData` of a view whose offset lies past its buffer's memory is also
 `error.OutOfBounds`, where cgltf returns a pointer past the end (test: `refusal: a view's data
-past the buffer's memory`).
+past the buffer's memory`). The accessor helpers read such a view as empty: a call that reads
+nothing from it, such as `unpackFloats` into an empty output, gives cgltf's result, and one
+that reads anything is refused.
+
+The oracle tests check every refusal: for each call the port refuses, they work out from
+cgltf's structs whether cgltf could read past the memory or write past the output there, and
+fail if it could not.
 
 The port checks every read against the memory a buffer holds, not against the buffer's
 `size`: a read past `size` but inside the memory, such as a GLB's BIN chunk longer than its
@@ -36,8 +42,8 @@ buffer, reads the same bytes as cgltf.
 - **NaN in transforms.** A transform computed from a NaN may keep either operand's NaN in an
   addition or a product, as the compiler orders the operands; neither C nor Zig fixes the
   order. The port's NaN payload can differ from cgltf's there, so the tests count any NaN as
-  equal to any NaN in `transformLocal` and `transformWorld`. Every other float, NaN included,
-  is compared as bits.
+  equal to any NaN in computed transforms. A node's own matrix, copied by both, and every
+  other float, NaN included, are compared as bits.
 - **`\u` escapes with characters that are not hex digits.** cgltf adds their value, -1, after
   shifting a negative `int` left, which C leaves undefined. The port computes the
   two's-complement result every compiler gives, and the tests compare it with cgltf's.
@@ -71,5 +77,9 @@ buffer, reads the same bytes as cgltf.
   null output.
 - **`unpackIndices`** takes the output's integer type (`u8`, `u16` or `u32`) where cgltf
   takes an output size in bytes, and returns 0 for indices wider than it, as cgltf does.
+- **Decoding in place.** `decodeString` returns the decoded text, where cgltf returns its
+  length: the text shrinks when it had escapes, and a slice kept from before, such as a name
+  in a `Gltf`, keeps its old length. Both stop at the first NUL, as C strings do, and a
+  file URI's `%00` ends the path `loadBuffers` opens, as in cgltf.
 - **Lifetimes.** A `Gltf` from `parse` points into the bytes it was given, as cgltf's
   `cgltf_data` does, so they must outlive it. Slices into a `Gltf` are stale after `deinit`.
