@@ -88,7 +88,12 @@ pub fn build(b: *std.Build) void {
                     .optimize = .fast,
                 }) },
                 .{ .name = "c", .module = upstreamHeader(b, target, .fast) },
-                .{ .name = "test_options", .module = test_options_mod },
+                .{ .name = "samples", .module = b.createModule(.{
+                    .root_source_file = b.path("test/samples.zig"),
+                    .target = target,
+                    .optimize = .fast,
+                    .imports = &.{.{ .name = "test_options", .module = test_options_mod }},
+                }) },
             },
         }),
     });
