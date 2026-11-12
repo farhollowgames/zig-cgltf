@@ -136,8 +136,8 @@ matrix, which both copy, and every other float, NaN included, are compared as bi
 
 ### Tests and counts
 
-`zig build test` runs 49 tests: 12 unit tests in `src/` and 37 tests in `test/`, through
-`test/differential.zig`. 25 of the 37 are oracle tests; the other 12 check the port's
+`zig build test` runs 51 tests: 13 unit tests in `src/` and 38 tests in `test/`, through
+`test/differential.zig`. 26 of the 38 are oracle tests; the other 12 check the port's
 refusals, failed allocations and a file reader of the caller's.
 
 | feature | inputs |
@@ -153,6 +153,7 @@ refusals, failed allocations and a file reader of the caller's.
 | accessors | every type, component type, normalization, stride and offset |
 | sparse accessors | with and without a base view, every index component type and two invalid ones, sorted, unsorted, repeated and too large indices |
 | validation | views (meshopt compression included), accessors, meshes, morph targets and weights, nodes and animations that break each check |
+| loops of parents | every graph of parents of up to five nodes, and 400 larger ones in shuffled order, with and without a loop |
 | buffers | data URIs of every form cgltf accepts or refuses, other URI schemes, the BIN chunk, files beside the glTF with escaped names, and sizes of 0, short and exact |
 | `number` | `atoi`, `atoll` and `atof` against the C library on hand-picked texts, 20,000 random texts and 20,000 random floats printed and read back |
 | `decodeString`, `decodeUri` | hand-picked texts, NUL bytes inside included, and 20,000 random texts; both sides decode in place, and every byte of the buffer is compared; a name from a parsed file decoded on both sides |

@@ -1,5 +1,14 @@
 # Status
 
+## validate pass
+
+On branch `perf/validate`: the validate row, cgltf's time over the port's, goes from 0.91 to
+1.07 (1.10, the median of nine runs). The index bound reads its last bytes, and runs under 64 bytes, as
+overlapping vectors; the loop-of-parents check walks once from each node and stops at a node
+already walked from; and `align(8)` places the fields `validate` reads of every accessor and
+node among the first. Tests: 51, with a unit test of the index bound and an edge test of
+every graph of parents of up to five nodes.
+
 ## Step-7 report
 
 Done: steps 5 to 7 on branch `review/perf-and-skeptic`, pushed; `main` holds steps 1 to 4.
@@ -109,6 +118,7 @@ The tests the tables name, by short name:
 | accessors | `edges: accessors of every type, component type and layout read as the original's` |
 | sparse | `edges: sparse accessors, with and without a base view, read as the original's` |
 | validation | `edges: validation of views, meshes, nodes and animations gives the original's results` |
+| parents | `edges: every graph of parents of up to five nodes, and larger random ones, loops included, validate as the original's` |
 | buffers | `edges: buffers from data URIs, files and the BIN chunk load as the original's` |
 | files | `edges: files beside the glTF load as the original's` |
 | decoding | the three `decoding:` tests in `test/functions_test.zig` |
@@ -147,7 +157,7 @@ The tests the tables name, by short name:
 | `cgltf_load_buffer_base64` | `loadBufferBase64` | base64, buffers | benchmarked |
 | `cgltf_decode_string` | `decodeString` | decoding, refusals | oracle-tested |
 | `cgltf_decode_uri` | `decodeUri` | decoding, files | oracle-tested |
-| `cgltf_validate` | `validate` | validation, samples, fuzz, refusals | benchmarked |
+| `cgltf_validate` | `validate` | validation, parents, samples, fuzz, refusals | benchmarked |
 | `cgltf_copy_extras_json` (deprecated) | `copyExtrasJson` | samples, strings, refusals | oracle-tested |
 
 ## Accessors, views and nodes

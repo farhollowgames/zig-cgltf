@@ -43,24 +43,24 @@ zig build bench -- --filter parse          # the rows whose name contains "parse
 
 ## Machine
 
-AMD Ryzen 9 9950X3D, Linux 7.3, Zig 0.17.0 (`x86_64` `znver5`), at commit `e0b7e45`, on
-11 November 2026, three rounds (`zig build bench -- --rounds 3`). Other builds were running:
-the one-minute load average was about 15 on 32 hardware threads, which is why some ranges
+AMD Ryzen 9 9950X3D, Linux 7.3, Zig 0.17.0 (`x86_64` `znver5`), at commit `3387a54`, on
+12 November 2026, three rounds (`zig build bench -- --rounds 3`). Other builds were running:
+the one-minute load average was about 10 on 32 hardware threads, which is why some ranges
 are wide.
 
 ## Results
 
 | feature | zig-cgltf ms | range | cgltf ms | range | cgltf / zig-cgltf |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| parse glTF | 61.256 | 11.4% | 90.821 | 11.7% | 1.48 |
-| parse GLB | 35.492 | 10.7% | 40.611 | 16.4% | 1.14 |
-| decode base64 | 1.025 | 1.3% | 68.456 | 1.2% | 66.78 |
-| validate | 5.189 | 11.2% | 4.713 | 12.6% | 0.91 |
-| unpack floats | 13.651 | 51.6% | 85.569 | 13.2% | 6.27 |
-| read float | 179.928 | 5.3% | 210.123 | 9.7% | 1.17 |
-| unpack indices | 4.002 | 36.6% | 10.318 | 3.7% | 2.58 |
-| read index | 48.278 | 39.4% | 48.274 | 12.1% | 1.00 |
-| world transforms | 0.453 | 2.0% | 0.350 | 2.6% | 0.77 |
+| parse glTF | 57.695 | 3.1% | 93.775 | 10.0% | 1.63 |
+| parse GLB | 34.981 | 2.4% | 40.228 | 4.9% | 1.15 |
+| decode base64 | 1.036 | 3.6% | 63.496 | 1.0% | 61.29 |
+| validate | 4.340 | 4.6% | 4.635 | 10.6% | 1.07 |
+| unpack floats | 12.333 | 2.1% | 85.873 | 18.1% | 6.96 |
+| read float | 179.392 | 5.0% | 200.480 | 6.1% | 1.12 |
+| unpack indices | 3.346 | 17.2% | 11.393 | 5.4% | 3.40 |
+| read index | 46.515 | 26.7% | 43.405 | 13.2% | 0.93 |
+| world transforms | 0.447 | 0.9% | 0.343 | 0.8% | 0.77 |
 
 ## Known biases and slower rows
 
@@ -77,9 +77,15 @@ are wide.
   accessor reads are written with `@Vector`.
 - **decode base64**: the port decodes 64 characters at a time with vectors; cgltf decodes
   one character at a time.
-- **validate**: both sides spend most of the time in the index bound loop, which is now
-  vectorized on both and bound by memory; the row moves between 0.89 and 1.05 from run to
-  run.
+- **validate**: most of the time goes to NodePerformanceTest's 10,000 meshes, where both
+  sides read each primitive's few indices and the accessors they check, bound by
+  memory. The port reads an index run's last bytes, and a run under 64 bytes, as
+  overlapping vectors; a walk up the parents stops at a node already walked from; and the
+  fields it reads of every accessor and node are laid out among the first. Over nine
+  unpinned runs the row's median was 1.10 (from 1.05 to 1.12), where it was 0.91 before;
+  on a core of the 96 MiB-cache CCD it is about 1.3.
+- **read index**: between 0.91 and 1.00 from run to run, as before these changes; not yet
+  looked into.
 - **world transforms**: 29% slower, not yet looked into; the row takes under half a
   millisecond over all 339 models.
 - The sample models are one input set. Files with much larger buffers or many more nodes may

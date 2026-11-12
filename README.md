@@ -99,8 +99,8 @@ The parts of cgltf that are left out, each with its reason, are listed in
 
 ## Testing and benchmarks
 
-`zig build test` runs 49 tests: 12 unit tests and 37 tests that build cgltf from `reference/`.
-Most of the 37 run cgltf and the port on the same inputs (every Khronos sample model,
+`zig build test` runs 51 tests: 13 unit tests and 38 tests that build cgltf from `reference/`.
+Most of the 38 run cgltf and the port on the same inputs (every Khronos sample model,
 hand-made edge cases and 10,000 fuzzed files) and compare every field of the result, every
 string byte, every reference as an index, and every float as bits.
 
@@ -108,11 +108,11 @@ Time taken by zig-cgltf against cgltf, one thread, over every sample model:
 
 | feature | zig-cgltf vs cgltf |
 | --- | ---: |
-| parse glTF | 33% faster |
+| parse glTF | 39% faster |
 | parse GLB | 13% faster |
-| validate | 10% slower |
-| unpack floats | about 6 times faster |
-| world transforms | 29% slower |
+| validate | 7% faster |
+| unpack floats | about 7 times faster |
+| world transforms | 30% slower |
 
 On an AMD Ryzen 9 9950X3D, Linux, Zig 0.17.0 (`x86_64` `znver5`), with cgltf built by Zig's
 clang at `-O3`. [`doc/TESTING.md`](doc/TESTING.md) describes the tests, and
