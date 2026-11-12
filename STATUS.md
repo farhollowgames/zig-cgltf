@@ -53,6 +53,11 @@ Written to resume from: the next agent reads this section and `git log`.
     function per index size: 34.0 to 4.4 ms (ratio 0.27 to 1.05). A `@bitCast` of a byte
     array to a vector compiled to scalar shifts and made it three times slower; loading
     through an `*align(1) const @Vector` pointer gives `vpmaxuw` on memory.
+  - decode base64: 64 characters at a time with `@Vector` range checks and shuffles into 48
+    bytes, then cgltf's loop for the rest or from a chunk with a character outside the
+    alphabet: 80.3 to 1.2 ms (ratio 0.81 to 58). A unit test in `load.zig` covers the chunks
+    and where a bad character is refused; the oracle's base64 fuzz texts are under 48
+    characters, so only the sample models' data URIs reach the chunks there.
 - Steps 6 and 7 (skeptic, fixes): not started.
 
 Next steps, in order: on `review/perf-and-skeptic`, a fresh agent's performance pass (each

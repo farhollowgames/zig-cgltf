@@ -50,6 +50,67 @@ fn base64Index(c: u8) ?u6 {
     };
 }
 
+const base64_chunk_chars = 64;
+const base64_chunk_bytes = base64_chunk_chars / 4 * 3;
+const Chars = @Vector(base64_chunk_chars, u8);
+const Sextets = @Vector(base64_chunk_chars / 4, u8);
+
+/// Every fourth lane of a chunk's characters, from lane `first`.
+fn quadLanes(comptime first: usize) [base64_chunk_chars / 4]i32 {
+    var mask: [base64_chunk_chars / 4]i32 = undefined;
+    for (&mask, 0..) |*lane, i| lane.* = @intCast(4 * i + first);
+    return mask;
+}
+
+/// Lane i of the first vector, then lane i of the second, for each i.
+fn pairLanes() [base64_chunk_chars / 2]i32 {
+    var mask: [base64_chunk_chars / 2]i32 = undefined;
+    for (0..base64_chunk_chars / 4) |i| {
+        mask[2 * i] = @intCast(i);
+        mask[2 * i + 1] = ~@as(i32, @intCast(i));
+    }
+    return mask;
+}
+
+/// Lanes 2i and 2i + 1 of the first vector, then lane i of the second.
+fn tripleLanes() [base64_chunk_bytes]i32 {
+    var mask: [base64_chunk_bytes]i32 = undefined;
+    for (0..base64_chunk_chars / 4) |i| {
+        mask[3 * i] = @intCast(2 * i);
+        mask[3 * i + 1] = @intCast(2 * i + 1);
+        mask[3 * i + 2] = ~@as(i32, @intCast(i));
+    }
+    return mask;
+}
+
+/// Decodes a chunk of base64 characters into `out`, or returns false,
+/// writing nothing, when one is outside the alphabet. Zig 0.17 leaves a
+/// loop over a runtime length scalar, so the lanes are written out.
+fn decodeBase64Chunk(text: *const [base64_chunk_chars]u8, out: *[base64_chunk_bytes]u8) bool {
+    const c: Chars = text.*;
+    const upper = c -% @as(Chars, @splat('A')) < @as(Chars, @splat(26));
+    const lower = c -% @as(Chars, @splat('a')) < @as(Chars, @splat(26));
+    const digit = c -% @as(Chars, @splat('0')) < @as(Chars, @splat(10));
+    const plus = c == @as(Chars, @splat('+'));
+    const slash = c == @as(Chars, @splat('/'));
+    if (@reduce(.Or, ~(upper | lower | digit | plus | slash))) return false;
+    var index = c -% @as(Chars, @splat('A'));
+    index = @select(u8, lower, c -% @as(Chars, @splat('a' - 26)), index);
+    index = @select(u8, digit, c +% @as(Chars, @splat(52 -% '0')), index);
+    index = @select(u8, plus, @as(Chars, @splat(62)), index);
+    index = @select(u8, slash, @as(Chars, @splat(63)), index);
+    const s0: Sextets = @shuffle(u8, index, undefined, quadLanes(0));
+    const s1: Sextets = @shuffle(u8, index, undefined, quadLanes(1));
+    const s2: Sextets = @shuffle(u8, index, undefined, quadLanes(2));
+    const s3: Sextets = @shuffle(u8, index, undefined, quadLanes(3));
+    const byte0 = s0 << @splat(2) | s1 >> @splat(4);
+    const byte1 = s1 << @splat(4) | s2 >> @splat(2);
+    const byte2 = s2 << @splat(6) | s3;
+    const bytes01 = @shuffle(u8, byte0, byte1, pairLanes());
+    out.* = @shuffle(u8, bytes01, byte2, tripleLanes());
+    return true;
+}
+
 /// cgltf's `cgltf_load_buffer_base64`: the first `size` bytes `base64`
 /// encodes, in memory from `gpa`. The text ends at its end or at a NUL;
 /// any character outside the base64 alphabet before `size` bytes, `=`
@@ -57,10 +118,20 @@ fn base64Index(c: u8) ?u6 {
 pub fn loadBufferBase64(gpa: Allocator, size: usize, base64: []const u8) Error![]u8 {
     const data = try gpa.alloc(u8, size);
     errdefer gpa.free(data);
+    // Whole chunks first: four characters make three bytes, so a chunk
+    // ends where the bit buffer below is empty. A chunk with a character
+    // outside the alphabet is left to the loop below, which refuses it.
+    var next: usize = 0;
+    var written: usize = 0;
+    while (written + base64_chunk_bytes <= size and next + base64_chunk_chars <= base64.len) {
+        const text = base64[next..][0..base64_chunk_chars];
+        if (!decodeBase64Chunk(text, data[written..][0..base64_chunk_bytes])) break;
+        next += base64_chunk_chars;
+        written += base64_chunk_bytes;
+    }
     var buffer: u32 = 0;
     var buffer_bits: u5 = 0;
-    var next: usize = 0;
-    for (data) |*byte| {
+    for (data[written..]) |*byte| {
         while (buffer_bits < 8) {
             const c = if (next < base64.len) base64[next] else 0;
             next += 1;
@@ -243,6 +314,35 @@ test "base64 decodes and stops at the end of the text" {
     try testing.expectEqualStrings("hello", data);
     try testing.expectError(error.IoError, loadBufferBase64(testing.allocator, 6, "aGVsbG8="));
     try testing.expectError(error.IoError, loadBufferBase64(testing.allocator, 9, "aGVsbG8"));
+}
+
+test "base64 over whole chunks decodes, and refuses a bad character only where it reads one" {
+    var prng = std.Random.DefaultPrng.init(0x6261_7365_3634);
+    const random = prng.random();
+    var raw: [300]u8 = undefined;
+    var text: [400]u8 = undefined;
+    for (0..2000) |_| {
+        const raw_len = random.uintLessThan(usize, raw.len + 1);
+        random.bytes(raw[0..raw_len]);
+        const encoded = std.base64.standard.Encoder.encode(&text, raw[0..raw_len]);
+        const size = random.uintLessThan(usize, raw_len + 1);
+        const data = try loadBufferBase64(testing.allocator, size, encoded);
+        try testing.expectEqualSlices(u8, raw[0..size], data);
+        testing.allocator.free(data);
+
+        if (encoded.len == 0) continue;
+        const bad = random.uintLessThan(usize, encoded.len);
+        text[bad] = if (random.boolean()) '=' else 0;
+        const chars_read = std.math.divCeil(usize, size * 8, 6) catch unreachable;
+        if (bad < chars_read) {
+            const refused = loadBufferBase64(testing.allocator, size, encoded);
+            try testing.expectError(error.IoError, refused);
+        } else {
+            const rest = try loadBufferBase64(testing.allocator, size, encoded);
+            try testing.expectEqualSlices(u8, raw[0..size], rest);
+            testing.allocator.free(rest);
+        }
+    }
 }
 
 test "decodeString decodes escapes and refuses a cut one" {
