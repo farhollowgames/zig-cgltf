@@ -283,12 +283,18 @@ pub fn expectSameHelpers(gpa: std.mem.Allocator, original: *const c.cgltf_data, 
     var comparer: Comparer = .{ .data = original };
     for (port.accessors, 0..) |*accessor, a| {
         const ca = &original.accessors[a];
-        try expectSameAccessor(gpa, ca, port, accessor, a);
+        try expectSameAccessor(gpa, original, ca, port, accessor, a);
     }
     for (port.buffer_views, 0..) |_, v| {
         const cv = &original.buffer_views[v];
         const expected = c.cgltf_buffer_view_data(cv);
-        const actual = cgltf.bufferViewData(port, @intCast(v)) catch continue;
+        const actual = cgltf.bufferViewData(port, @intCast(v)) catch {
+            const memory = port.buffers[port.buffer_views[v].buffer].data;
+            if (cv.*.data != null or memory == null or cv.*.offset <= memory.?.len) {
+                return fail("view {d} data refused, inside the buffer's memory", .{v});
+            }
+            continue;
+        };
         if ((expected == null) != (actual == null)) return fail("view {d} data", .{v});
         if (actual) |bytes| {
             const buffer_data: [*]const u8 = @ptrCast(original.buffer_views[v].buffer.*.data.?);
@@ -302,10 +308,18 @@ pub fn expectSameHelpers(gpa: std.mem.Allocator, original: *const c.cgltf_data, 
         const cn = &original.nodes[n];
         var expected: [16]f32 = undefined;
         c.cgltf_node_transform_local(cn, &expected);
-        if (!computedFloatsEqual(&expected, &cgltf.transformLocal(node))) return fail("node {d} local transform", .{n});
-        const world = cgltf.transformWorld(port, @intCast(n)) catch continue;
+        // A node's own matrix is copied, not computed, so its bits match.
+        const local_equal: *const fn ([]const f32, []const f32) bool = if (node.has_matrix) &floatsEqual else &computedFloatsEqual;
+        if (!local_equal(&expected, &cgltf.transformLocal(node))) return fail("node {d} local transform", .{n});
+        const world = cgltf.transformWorld(port, @intCast(n)) catch |err| {
+            try expectCycle(original, n);
+            switch (err) {
+                error.ParentCycle => continue,
+            }
+        };
         c.cgltf_node_transform_world(cn, &expected);
-        if (!computedFloatsEqual(&expected, &world)) {
+        const world_equal = if (node.parent == null) local_equal else &computedFloatsEqual;
+        if (!world_equal(&expected, &world)) {
             return fail("node {d} world transform: original {any}, port {any}", .{ n, expected, world });
         }
     }
@@ -325,31 +339,44 @@ pub fn expectSameHelpers(gpa: std.mem.Allocator, original: *const c.cgltf_data, 
 
 fn expectSameAccessor(
     gpa: std.mem.Allocator,
+    original: *const c.cgltf_data,
     ca: [*c]const c.cgltf_accessor,
     port: *const cgltf.Gltf,
     accessor: *const cgltf.Accessor,
     a: usize,
 ) !void {
+    const element_size = c.cgltf_calc_size(ca.*.type, ca.*.component_type);
+    const component_size = c.cgltf_component_size(ca.*.component_type);
+    const components = c.cgltf_num_components(ca.*.type);
     // Element by element, with outputs of every size up to 16.
     const elements = @min(accessor.count, 1 << 16);
     for (0..elements) |e| {
         for ([_]usize{ 0, 1, 3, 16 }) |size| {
             var expected: [16]f32 = @splat(-7);
             var actual: [16]f32 = @splat(-7);
-            const ok = cgltf.readFloat(port, accessor, e, actual[0..size]) catch continue;
+            const ok = cgltf.readFloat(port, accessor, e, actual[0..size]) catch {
+                try expectMayRead(port, original, ca, e + 1, element_size, "read_float", a);
+                continue;
+            };
             const expected_ok = c.cgltf_accessor_read_float(ca, e, &expected, size) != 0;
             if (ok != expected_ok or !floatsEqual(&expected, &actual)) {
                 return fail("accessor {d} read_float({d}, {d})", .{ a, e, size });
             }
             var expected_u: [16]u32 = @splat(7);
             var actual_u: [16]u32 = @splat(7);
-            const ok_u = cgltf.readUint(port, accessor, e, actual_u[0..size]) catch continue;
+            const ok_u = cgltf.readUint(port, accessor, e, actual_u[0..size]) catch {
+                try expectMayRead(port, original, ca, e + 1, element_size, "read_uint", a);
+                continue;
+            };
             const expected_ok_u = c.cgltf_accessor_read_uint(ca, e, &expected_u, size) != 0;
             if (ok_u != expected_ok_u or !std.mem.eql(u32, &expected_u, &actual_u)) {
                 return fail("accessor {d} read_uint({d}, {d})", .{ a, e, size });
             }
         }
-        const index = cgltf.readIndex(port, accessor, e) catch continue;
+        const index = cgltf.readIndex(port, accessor, e) catch {
+            try expectMayRead(port, original, ca, e + 1, component_size, "read_index", a);
+            continue;
+        };
         if (index != c.cgltf_accessor_read_index(ca, e)) return fail("accessor {d} read_index({d})", .{ a, e });
     }
 
@@ -363,7 +390,15 @@ fn expectSameAccessor(
             defer gpa.free(actual);
             @memset(expected, -7);
             @memset(actual, -7);
-            const written = cgltf.unpackFloats(port, accessor, actual) catch continue;
+            const written = cgltf.unpackFloats(port, accessor, actual) catch {
+                const unpacked = @min(float_count, n) / @max(components, 1);
+                if (!mayReadPast(port, original, ca, unpacked, element_size) and
+                    !sparseMayWritePast(port, original, ca, n))
+                {
+                    return fail("accessor {d} unpack_floats({d}) refused, inside memory and output", .{ a, n });
+                }
+                continue;
+            };
             if (written != c.cgltf_accessor_unpack_floats(ca, expected.ptr, n) or !floatsEqual(expected, actual)) {
                 return fail("accessor {d} unpack_floats({d})", .{ a, n });
             }
@@ -388,8 +423,123 @@ fn expectSameAccessor(
                 {
                     return fail("accessor {d} unpack_indices({s})", .{ a, @typeName(T) });
                 }
-            } else |_| {}
+            } else |_| {
+                const reads = ca.*.is_sparse == 0 and ca.*.buffer_view != null and component_size <= @sizeOf(T);
+                if (!reads or !viewMayReadPast(port, original, ca.*.buffer_view, ca.*.offset, ca.*.stride, index_count, component_size)) {
+                    return fail("accessor {d} unpack_indices({s}) refused, inside the buffer's memory", .{ a, @typeName(T) });
+                }
+            }
         }
+    }
+}
+
+// The port refuses with `OutOfBounds` where the original would read or
+// write out of bounds, and the original is not run there. The functions
+// below work out from the original's structs whether it could, so that a
+// refusal they do not allow fails the test.
+
+/// Whether reading `elements` elements of `size` bytes, `stride` apart,
+/// from `offset` in `view` can reach past the memory behind it.
+fn viewMayReadPast(
+    port: *const cgltf.Gltf,
+    original: *const c.cgltf_data,
+    view: [*c]const c.cgltf_buffer_view,
+    offset: usize,
+    stride: usize,
+    elements: usize,
+    size: usize,
+) bool {
+    if (view == null or elements == 0) return false;
+    const start, const memory = viewMemory(port, original, view, offset) orelse return false;
+    const span = std.math.mul(usize, stride, elements - 1) catch return true;
+    const end = std.math.add(usize, start, span) catch return true;
+    return (std.math.add(usize, end, size) catch return true) > memory.len;
+}
+
+/// The memory behind `view` and where `offset` lies in it, or null when
+/// the original has no memory there and reads nothing.
+fn viewMemory(
+    port: *const cgltf.Gltf,
+    original: *const c.cgltf_data,
+    view: [*c]const c.cgltf_buffer_view,
+    offset: usize,
+) ?struct { usize, []const u8 } {
+    const v = (@intFromPtr(view) - @intFromPtr(original.buffer_views)) / @sizeOf(c.cgltf_buffer_view);
+    if (port.buffer_views[v].data) |data| return .{ offset, data };
+    const memory = port.buffers[port.buffer_views[v].buffer].data orelse return null;
+    // Past `maxInt(usize)`, the original's pointer wraps: count it as past.
+    return .{ std.math.add(usize, view.*.offset, offset) catch std.math.maxInt(usize), memory };
+}
+
+/// Whether an accessor's base elements, up to `elements`, or its sparse
+/// indices and values can be read past their memory.
+fn mayReadPast(
+    port: *const cgltf.Gltf,
+    original: *const c.cgltf_data,
+    ca: [*c]const c.cgltf_accessor,
+    elements: usize,
+    size: usize,
+) bool {
+    const a = ca.*;
+    if (viewMayReadPast(port, original, a.buffer_view, a.offset, a.stride, elements, size)) return true;
+    if (a.is_sparse == 0) return false;
+    const sparse = a.sparse;
+    const index_size = c.cgltf_component_size(sparse.indices_component_type);
+    return viewMayReadPast(port, original, sparse.indices_buffer_view, sparse.indices_byte_offset, index_size, sparse.count, index_size) or
+        viewMayReadPast(port, original, sparse.values_buffer_view, sparse.values_byte_offset, a.stride, sparse.count, size);
+}
+
+fn expectMayRead(
+    port: *const cgltf.Gltf,
+    original: *const c.cgltf_data,
+    ca: [*c]const c.cgltf_accessor,
+    elements: usize,
+    size: usize,
+    comptime what: []const u8,
+    a: usize,
+) Mismatch!void {
+    if (!mayReadPast(port, original, ca, elements, size)) {
+        return fail("accessor {d} " ++ what ++ "({d}) refused, inside the buffer's memory", .{ a, elements - 1 });
+    }
+}
+
+/// Whether a sparse index puts its element past the first `out_len`
+/// floats of the output, read from the indices in memory.
+fn sparseMayWritePast(
+    port: *const cgltf.Gltf,
+    original: *const c.cgltf_data,
+    ca: [*c]const c.cgltf_accessor,
+    out_len: usize,
+) bool {
+    const a = ca.*;
+    if (a.is_sparse == 0) return false;
+    const sparse = a.sparse;
+    if (sparse.indices_buffer_view == null) return false;
+    const start, const memory = viewMemory(port, original, sparse.indices_buffer_view, sparse.indices_byte_offset) orelse
+        return false;
+    const components = c.cgltf_num_components(a.type);
+    const index_size = c.cgltf_component_size(sparse.indices_component_type);
+    for (0..sparse.count) |i| {
+        const at = start +| i *| index_size;
+        if (at +| index_size > memory.len) return true;
+        const bytes = memory[at..];
+        const index: usize = switch (sparse.indices_component_type) {
+            c.cgltf_component_type_r_8u => bytes[0],
+            c.cgltf_component_type_r_16u => std.mem.readInt(u16, bytes[0..2], .native),
+            c.cgltf_component_type_r_32u => std.mem.readInt(u32, bytes[0..4], .native),
+            else => 0,
+        };
+        if ((index +| 1) *| components > out_len) return true;
+    }
+    return false;
+}
+
+/// A port refusal of a node's world transform: its parents must loop.
+fn expectCycle(original: *const c.cgltf_data, n: usize) Mismatch!void {
+    var node: [*c]const c.cgltf_node = &original.nodes[n];
+    for (0..original.nodes_count + 1) |_| {
+        node = node.*.parent;
+        if (node == null) return fail("node {d} world transform refused, with no loop of parents", .{n});
     }
 }
 

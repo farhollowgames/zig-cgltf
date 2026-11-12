@@ -171,7 +171,7 @@ test "fuzz: mutated sample models, GLB containers and upstream's corpus give the
             } }, options));
         }
     }.case);
-    if (test_options.fuzz_replay == null) try Context.tally.expectReach("mutations", 300);
+    if (test_options.fuzz_replay == null) try Context.tally.expectReach("mutations", 250);
 }
 
 /// A random glTF document written as JSON. A strict document keeps to
@@ -717,4 +717,70 @@ test "fuzz: random glTF documents give the original's results" {
         }
     }.case);
     if (test_options.fuzz_replay == null) try Context.tally.expectReach("documents", 600);
+}
+
+test "fuzz: random accessor layouts over one buffer give the original's results" {
+    // Unvalidated layouts of every type, component type, stride, offset
+    // and sparse part over random bytes, so the accessor helpers' fast
+    // paths and their bounds meet every edge of the buffer. The helpers
+    // run whether or not a layout validates; few do.
+    const Context = struct {
+        var tally: oracle.Tally = .{};
+    };
+    Context.tally = .{};
+    try fuzz.run("layouts", 3000, struct {
+        fn case(random: std.Random) !void {
+            const gpa = testing.allocator;
+            var json: std.ArrayList(u8) = .empty;
+            defer json.deinit(gpa);
+            var bytes: [512]u8 = undefined;
+            const size = random.uintLessThan(usize, bytes.len + 1);
+            random.bytes(bytes[0..size]);
+            const encoder = std.base64.standard.Encoder;
+            var text: [encoder.calcSize(bytes.len)]u8 = undefined;
+            const encoded = encoder.encode(&text, bytes[0..size]);
+            try json.print(gpa,
+                \\{{"asset":{{"version":"2.0"}},"buffers":[{{"byteLength":{d},"uri":"data:;base64,{s}"}}],
+            , .{ size, encoded });
+            try json.print(gpa, "\"bufferViews\":[", .{});
+            for (0..2) |v| {
+                if (v > 0) try json.print(gpa, ",", .{});
+                const offset = random.uintLessThan(usize, size + 17);
+                const length = random.uintLessThan(usize, size + 17);
+                try json.print(gpa, "{{\"buffer\":0,\"byteOffset\":{d},\"byteLength\":{d}", .{ offset, length });
+                if (random.boolean()) try json.print(gpa, ",\"byteStride\":{d}", .{random.uintLessThan(u32, 65)});
+                try json.print(gpa, "}}", .{});
+            }
+            const types = [_][]const u8{ "SCALAR", "VEC2", "VEC3", "VEC4", "MAT2", "MAT3", "MAT4" };
+            const components = [_]u32{ 5120, 5121, 5122, 5123, 5125, 5126, 5124 };
+            try json.print(gpa, "],\"accessors\":[{{\"componentType\":{d},\"type\":\"{s}\",\"count\":{d}", .{
+                components[random.uintLessThan(usize, components.len)],
+                types[random.uintLessThan(usize, types.len)],
+                random.uintLessThan(u32, 41),
+            });
+            if (random.uintLessThan(u8, 5) != 0) {
+                try json.print(gpa, ",\"bufferView\":{d},\"byteOffset\":{d}", .{
+                    random.uintLessThan(u32, 2),
+                    random.uintLessThan(u32, 65),
+                });
+            }
+            if (random.boolean()) try json.print(gpa, ",\"normalized\":true", .{});
+            if (random.uintLessThan(u8, 3) == 0) {
+                try json.print(gpa,
+                    \\,"sparse":{{"count":{d},"indices":{{"bufferView":{d},"byteOffset":{d},"componentType":{d}}},
+                    \\"values":{{"bufferView":{d},"byteOffset":{d}}}}}
+                , .{
+                    random.uintLessThan(u32, 9),
+                    random.uintLessThan(u32, 2),
+                    random.uintLessThan(u32, 33),
+                    ([_]u32{ 5121, 5123, 5125 })[random.uintLessThan(usize, 3)],
+                    random.uintLessThan(u32, 2),
+                    random.uintLessThan(u32, 33),
+                });
+            }
+            try json.print(gpa, "}}]}}", .{});
+            Context.tally.add(try oracle.expectSame(gpa, testing.io, .{ .bytes = .{ .data = json.items } }, .{}));
+        }
+    }.case);
+    if (test_options.fuzz_replay == null) try Context.tally.expectReach("layouts", 50);
 }

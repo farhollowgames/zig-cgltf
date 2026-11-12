@@ -26,6 +26,17 @@ pub fn bufferViewData(gltf: *const Gltf, view_index: u32) ReadError!?[]const u8 
     return data[view.offset..];
 }
 
+/// The memory a view's elements are read from, as `bufferViewData` gives
+/// it, except that a view starting past the end of its buffer's memory
+/// gives an empty slice: reading nothing there succeeds, as in cgltf, and
+/// reading anything is `error.OutOfBounds`.
+fn viewData(gltf: *const Gltf, view_index: u32) ?[]const u8 {
+    const view = &gltf.buffer_views[view_index];
+    if (view.data) |data| return data;
+    const data = gltf.buffers[view.buffer].data orelse return null;
+    return data[@min(view.offset, data.len)..];
+}
+
 /// cgltf's `cgltf_find_accessor`: the accessor of the primitive's first
 /// attribute of `attribute_type` with set number `index`.
 pub fn findAccessor(primitive: *const types.Primitive, attribute_type: types.AttributeType, index: i32) ?u32 {
@@ -201,8 +212,8 @@ const Element = struct { memory: []const u8, offset: usize };
 /// element at `needle`, found by binary search over the sorted indices.
 fn findSparseIndex(gltf: *const Gltf, accessor: *const Accessor, needle: usize) ReadError!?Element {
     const sparse = &accessor.sparse;
-    const index_data = try bufferViewData(gltf, sparse.indices_buffer_view.?) orelse return null;
-    const value_data = try bufferViewData(gltf, sparse.values_buffer_view.?) orelse return null;
+    const index_data = viewData(gltf, sparse.indices_buffer_view.?) orelse return null;
+    const value_data = viewData(gltf, sparse.values_buffer_view.?) orelse return null;
     const index_stride = cgltf.componentSize(sparse.indices_component_type);
     const index_size = indexSize(sparse.indices_component_type);
     var offset: usize = 0;
@@ -235,7 +246,7 @@ pub fn readFloat(gltf: *const Gltf, accessor: *const Accessor, index: usize, out
         @memset(out, 0);
         return true;
     };
-    const memory = try bufferViewData(gltf, view) orelse return false;
+    const memory = viewData(gltf, view) orelse return false;
     return elementReadFloat(memory, accessor.offset +% accessor.stride *% index, accessor, out);
 }
 
@@ -252,7 +263,7 @@ pub fn readUint(gltf: *const Gltf, accessor: *const Accessor, index: usize, out:
         @memset(out, 0);
         return true;
     };
-    const memory = try bufferViewData(gltf, view) orelse return false;
+    const memory = viewData(gltf, view) orelse return false;
     return elementReadUint(memory, accessor.offset +% accessor.stride *% index, accessor, out);
 }
 
@@ -267,7 +278,7 @@ pub fn readIndex(gltf: *const Gltf, accessor: *const Accessor, index: usize) Rea
         }
     }
     const view = accessor.buffer_view orelse return 0;
-    const memory = try bufferViewData(gltf, view) orelse return 0;
+    const memory = viewData(gltf, view) orelse return 0;
     const bytes = try bytesAt(memory, accessor.offset +% accessor.stride *% index, size);
     return componentReadIndex(bytes, accessor.component_type);
 }
@@ -359,7 +370,7 @@ pub fn unpackFloats(gltf: *const Gltf, accessor: *const Accessor, out: []f32) Re
     const used = out[0 .. element_count * floats_per_element];
 
     if (accessor.buffer_view) |view| {
-        const memory = try bufferViewData(gltf, view) orelse return 0;
+        const memory = viewData(gltf, view) orelse return 0;
         const span = elementSpan(accessor.type, accessor.component_type);
         if (accessor.component_type == .r_32f and accessor.stride == floats_per_element * 4) {
             const bytes = try bytesAt(memory, accessor.offset, used.len * 4);
@@ -381,8 +392,8 @@ pub fn unpackFloats(gltf: *const Gltf, accessor: *const Accessor, out: []f32) Re
 
     if (accessor.is_sparse) {
         const sparse = &accessor.sparse;
-        const index_data = try bufferViewData(gltf, sparse.indices_buffer_view.?) orelse return 0;
-        const value_data = try bufferViewData(gltf, sparse.values_buffer_view.?) orelse return 0;
+        const index_data = viewData(gltf, sparse.indices_buffer_view.?) orelse return 0;
+        const value_data = viewData(gltf, sparse.values_buffer_view.?) orelse return 0;
         const index_stride = cgltf.componentSize(sparse.indices_component_type);
         const index_size = indexSize(sparse.indices_component_type);
         var index_offset = sparse.indices_byte_offset;
@@ -429,7 +440,7 @@ pub fn unpackIndices(
     if (accessor.is_sparse) return 0;
     const view = accessor.buffer_view orelse return 0;
     if (index_component_size > out_component_size) return 0;
-    const memory = try bufferViewData(gltf, view) orelse return 0;
+    const memory = viewData(gltf, view) orelse return 0;
 
     if (index_component_size == out_component_size and
         accessor.stride == out_component_size * numbers_per_element)
