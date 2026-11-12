@@ -88,8 +88,14 @@ Written to resume from: the next agent reads this section and `git log`.
 - Step 8 (release): not started; it waits for the author's approval of the left-out list
   and the review of the branch.
 
-Next steps: the author reviews `review/perf-and-skeptic` and the open points; then merge,
-tag `v0.1.0`, and the release notes.
+- The writer (`cgltf_write.h`), on branch `port/writer` from `review/perf-and-skeptic`, as
+  the author asked: ported and oracle-tested (every sample model's text and files, byte for
+  byte; round trips; 3,000 generated documents; `%.9g` against glibc). Not yet done: its
+  benchmark row, the performance pass, the skeptic and the fixes, and the docs.
+
+Next steps: the writer's benchmark, a fresh performance pass, a fresh skeptic, the fixes,
+then README, `doc/` and this file; then the author reviews both branches and the open points,
+and the release: merge, tag `v0.1.0`, and the release notes.
 
 ## Tests
 
@@ -119,6 +125,13 @@ The tests the tables name, by short name:
 | refusals | the `refusal:` tests in `test/refusals_test.zig` |
 | allocation | `a failed allocation at any point of parsing and loading a model leaks nothing` |
 | reader | `a file reader of the caller's reads the file and the buffers, and releases them` |
+| write-samples | `write: every sample model writes as the original writes it` |
+| write-again | `write: every sample model's text parses again in both, as the original's` |
+| write-files | `write: files of every sample model, as glTF and GLB, are the original's`, and `write: a file that cannot be created is not found, as the original's` |
+| write-fuzz | `fuzz: random glTF documents write as the original writes them, and parse again` |
+| write-refusals | the two `refusal: writing` tests |
+| write-unit | the unit tests in `src/write.zig` |
+| floats | the two `numbers:` tests of `%.9g`, and `formatFloat prints nine significant digits as glibc's %.9g` |
 
 ## Parsing
 
@@ -194,11 +207,21 @@ Each is read into the fields cgltf reads it into.
 | `EXT_mesh_gpu_instancing` | extensions, samples, fuzz | oracle-tested |
 | `EXT_texture_webp` | extensions, samples, fuzz | oracle-tested |
 
+## Writing
+
+From `cgltf_write.h`, on branch `port/writer`.
+
+| upstream | zig-cgltf | tests | state |
+| --- | --- | --- | --- |
+| `cgltf_write` into a buffer | `write` to an `std.Io.Writer` | write-samples, write-again, write-fuzz, write-unit | oracle-tested |
+| `cgltf_write` with no buffer (the size) | `write` to an `std.Io.Writer.Discarding` | write-samples, write-refusals | oracle-tested |
+| `cgltf_write_file`, glTF and GLB | `writeFile` | write-files | oracle-tested |
+| every object, extension and extras the writer writes | as upstream | write-samples, write-fuzz | oracle-tested |
+| `%.9g` through `snprintf` | `number.formatFloat` | floats | oracle-tested |
+
 ## Left out
 
-Awaiting the author's approval:
-
-- `cgltf_write.h`, the glTF writer, a separate header: Loomwork only reads glTF.
+Nothing: `cgltf_write.h` is ported, as the author asked.
 
 ## Not in cgltf
 

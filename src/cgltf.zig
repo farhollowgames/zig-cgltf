@@ -16,6 +16,7 @@ const load = @import("load.zig");
 const check = @import("validate.zig");
 const accessor = @import("accessor.zig");
 const transform = @import("transform.zig");
+const write_json = @import("write.zig");
 
 /// The C library's `atoi`, `atoll` and `atof` as glibc reads text in the C
 /// locale, which cgltf reads every JSON number with.
@@ -100,6 +101,9 @@ pub const bufferViewData = accessor.bufferViewData;
 pub const findAccessor = accessor.findAccessor;
 pub const transformLocal = transform.transformLocal;
 pub const transformWorld = transform.transformWorld;
+pub const WriteError = write_json.WriteError;
+pub const write = write_json.write;
+pub const writeFile = write_json.writeFile;
 
 /// cgltf's results other than success, and the port's own refusals.
 pub const Error = error{
@@ -336,6 +340,7 @@ test {
     _ = check;
     _ = accessor;
     _ = transform;
+    _ = write_json;
 }
 
 const testing = std.testing;

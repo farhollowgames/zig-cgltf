@@ -22,6 +22,14 @@ licence. From cgltf's LICENSE:
     Copyright (c) 2018-2021 Johannes Kuhlmann
 
 -------------------------------------------------------------------------------
+cgltf's writer (src/write.zig)
+
+Translated from cgltf_write.h, in the same repository at the same commit,
+licensed under the MIT licence. From cgltf_write.h:
+
+    Copyright (c) 2019-2021 Philip Rideout
+
+-------------------------------------------------------------------------------
 jsmn (src/jsmn.zig)
 
 Translated from the copy of jsmn included in cgltf.h, which names its
@@ -34,8 +42,9 @@ jsmn's LICENSE:
 src/number.zig
 
 Written for zig-cgltf, not translated: it gives the results of the C
-library's atoi, atoll and atof, through which cgltf reads numbers, and its
-tests compare it with glibc's.
+library's atoi, atoll and atof, through which cgltf reads numbers, and of
+its %.9g, with which cgltf writes them, and its tests compare it with
+glibc's.
 
 -------------------------------------------------------------------------------
 reference/

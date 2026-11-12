@@ -469,8 +469,9 @@ pub const Mesh = struct {
 
 pub const Skin = struct {
     name: ?[:0]u8 = null,
-    /// Nodes.
-    joints: []u32 = &.{},
+    /// Nodes. Null when the file has no `joints`; empty when it has an
+    /// empty array, which the writer keeps.
+    joints: ?[]u32 = null,
     skeleton: ?u32 = null,
     inverse_bind_matrices: ?u32 = null,
     extras: Extras = .{},
@@ -522,7 +523,8 @@ pub const Node = struct {
     name: ?[:0]u8 = null,
     /// Set from the parent's `children`.
     parent: ?u32 = null,
-    children: []u32 = &.{},
+    /// Null and empty differ as for `Skin.joints`.
+    children: ?[]u32 = null,
     skin: ?u32 = null,
     mesh: ?u32 = null,
     camera: ?u32 = null,
@@ -545,7 +547,8 @@ pub const Node = struct {
 
 pub const Scene = struct {
     name: ?[:0]u8 = null,
-    nodes: []u32 = &.{},
+    /// Null and empty differ as for `Skin.joints`.
+    nodes: ?[]u32 = null,
     extras: Extras = .{},
     extensions: []Extension = &.{},
 };

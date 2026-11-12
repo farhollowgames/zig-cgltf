@@ -90,6 +90,59 @@ test "numbers: fuzz: random floats print and read back as the C library reads th
     }.case);
 }
 
+fn expectSameFloatText(value: f32) !void {
+    var expected: [64]u8 = undefined;
+    const n = c.snprintf(&expected, expected.len, "%.9g", @as(f64, value));
+    var buffer: [cgltf.number.float_text_max]u8 = undefined;
+    const actual = cgltf.number.formatFloat(&buffer, value);
+    if (!std.mem.eql(u8, expected[0..@intCast(n)], actual)) {
+        std.debug.print("%.9g of 0x{x:0>8}: original {s}, port {s}\n", .{
+            @as(u32, @bitCast(value)), expected[0..@intCast(n)], actual,
+        });
+        return error.Mismatch;
+    }
+}
+
+test "numbers: floats print as the C library prints them with %.9g" {
+    // Ties at the tenth digit, which round to even.
+    for ([_]f32{ 1234567.625, 1234567.875, 2097151.125, 0.5, 1.5, 2.5 }) |value| {
+        try expectSameFloatText(value);
+        try expectSameFloatText(-value);
+    }
+    // Every power of two and ten, and the floats beside them.
+    var exponent: i32 = -149;
+    while (exponent <= 127) : (exponent += 1) {
+        const power = std.math.ldexp(@as(f32, 1), exponent);
+        for ([_]f32{ power, std.math.nextAfter(f32, power, 0), std.math.nextAfter(f32, power, std.math.inf(f32)) }) |value| {
+            try expectSameFloatText(value);
+        }
+    }
+    var decimal: i32 = -45;
+    while (decimal <= 38) : (decimal += 1) {
+        const power: f32 = @floatCast(std.math.pow(f64, 10, @floatFromInt(decimal)));
+        for ([_]f32{ power, std.math.nextAfter(f32, power, 0), std.math.nextAfter(f32, power, std.math.inf(f32)) }) |value| {
+            try expectSameFloatText(value);
+            try expectSameFloatText(-value);
+        }
+    }
+    for ([_]f32{ 0, -0.0, std.math.inf(f32), -std.math.inf(f32), std.math.nan(f32), -std.math.nan(f32) }) |value| {
+        try expectSameFloatText(value);
+    }
+    try expectSameFloatText(@bitCast(@as(u32, 0x7FC1_2345)));
+    try expectSameFloatText(@bitCast(@as(u32, 0xFF80_0001)));
+}
+
+test "numbers: fuzz: random floats print as the C library prints them with %.9g" {
+    try fuzz.run("float printing", 20000, struct {
+        fn case(random: std.Random) !void {
+            // Any bits, and floats with few digits, as files hold.
+            for (0..10) |_| try expectSameFloatText(@bitCast(random.int(u32)));
+            const digits: f32 = @floatFromInt(random.intRangeAtMost(i32, -100_000, 100_000));
+            try expectSameFloatText(digits / 1000);
+        }
+    }.case);
+}
+
 fn expectSameDecodeString(text: []const u8) !void {
     var original: [128:0]u8 = undefined;
     var port: [128:0]u8 = undefined;

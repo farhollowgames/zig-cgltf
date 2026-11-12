@@ -1,8 +1,9 @@
-//! The C library's text-to-number conversions as cgltf calls them: `atoi`,
-//! `atoll` and `atof`, with glibc's behaviour in the C locale. cgltf reads
-//! every JSON number through these, so a port that reads numbers any other
-//! way gives different integers and floats on unusual input: leading
-//! spaces, trailing text, hexadecimal floats, `nan(...)`, overflow.
+//! The C library's number conversions as cgltf calls them: `atoi`, `atoll`
+//! and `atof` to read, and `%.9g` to write, with glibc's behaviour in the C
+//! locale. cgltf reads and writes every JSON number through these, so a
+//! port that converts numbers any other way gives different integers, floats
+//! and text on unusual input: leading spaces, trailing text, hexadecimal
+//! floats, `nan(...)`, overflow, and digits past the shortest round trip.
 
 const std = @import("std");
 
@@ -197,6 +198,137 @@ pub fn toFloat(d: f64) f32 {
     return @floatCast(d);
 }
 
+/// The longest text `formatFloat` writes: a sign, nine digits, a point
+/// and a four-zero lead in fixed notation.
+pub const float_text_max = 16;
+
+/// glibc's `printf("%.9g", value)` in the C locale, as cgltf's writer
+/// prints every float: the value's nine leading significant digits,
+/// correctly rounded half to even from its exact binary value, in fixed
+/// notation for decimal exponents from -4 to 8 and in scientific notation
+/// otherwise, without trailing zeros; `inf`, `nan` and `-0` as glibc
+/// writes them. The text is in `buffer`.
+pub fn formatFloat(buffer: *[float_text_max]u8, value: f32) []const u8 {
+    const bits: u32 = @bitCast(value);
+    var len: usize = 0;
+    if (bits >> 31 != 0) {
+        buffer[0] = '-';
+        len = 1;
+    }
+    const exponent_bits = (bits >> 23) & 0xFF;
+    const fraction = bits & 0x7F_FFFF;
+    if (exponent_bits == 0xFF) {
+        const text = if (fraction == 0) "inf" else "nan";
+        @memcpy(buffer[len..][0..3], text);
+        return buffer[0 .. len + 3];
+    }
+    if (exponent_bits == 0 and fraction == 0) {
+        buffer[len] = '0';
+        return buffer[0 .. len + 1];
+    }
+    // The value is `mantissa * 2^binary_exponent` exactly.
+    const mantissa: u256 = if (exponent_bits == 0) fraction else fraction | 1 << 23;
+    const binary_exponent: i32 = if (exponent_bits == 0)
+        -149
+    else
+        @as(i32, @intCast(exponent_bits)) - 150;
+
+    // `decimal_exponent` is floor(log10(|value|)); the estimate can be one
+    // off, and the digits tell which way.
+    const magnitude = @abs(@as(f64, value));
+    var decimal_exponent: i32 = @intFromFloat(@floor(std.math.log10(magnitude)));
+    var digits: u256 = undefined;
+    while (true) {
+        // |value| * 10^(8 - decimal_exponent) as a quotient and remainder.
+        var numerator = mantissa;
+        var denominator: u256 = 1;
+        if (binary_exponent >= 0) {
+            numerator <<= @intCast(binary_exponent);
+        } else {
+            denominator <<= @intCast(-binary_exponent);
+        }
+        const scale = 8 - decimal_exponent;
+        if (scale >= 0) {
+            numerator *= power10(@intCast(scale));
+        } else {
+            denominator *= power10(@intCast(-scale));
+        }
+        digits = numerator / denominator;
+        if (digits >= 1_000_000_000) {
+            decimal_exponent += 1;
+            continue;
+        }
+        if (digits < 100_000_000) {
+            decimal_exponent -= 1;
+            continue;
+        }
+        const remainder = numerator % denominator;
+        if (2 * remainder > denominator or (2 * remainder == denominator and digits & 1 == 1)) {
+            digits += 1;
+        }
+        if (digits == 1_000_000_000) {
+            digits = 100_000_000;
+            decimal_exponent += 1;
+        }
+        break;
+    }
+    var text: [9]u8 = undefined;
+    var rest: u32 = @intCast(digits);
+    var i: usize = 9;
+    while (i > 0) {
+        i -= 1;
+        text[i] = '0' + @as(u8, @intCast(rest % 10));
+        rest /= 10;
+    }
+    var significant: usize = 9;
+    while (text[significant - 1] == '0') significant -= 1;
+
+    if (decimal_exponent < -4 or decimal_exponent >= 9) {
+        buffer[len] = text[0];
+        len += 1;
+        if (significant > 1) {
+            buffer[len] = '.';
+            @memcpy(buffer[len + 1 ..][0 .. significant - 1], text[1..significant]);
+            len += significant;
+        }
+        buffer[len] = 'e';
+        buffer[len + 1] = if (decimal_exponent < 0) '-' else '+';
+        len += 2;
+        const shown = @abs(decimal_exponent);
+        if (shown >= 100) {
+            buffer[len] = '0' + @as(u8, @intCast(shown / 100));
+            len += 1;
+        }
+        buffer[len] = '0' + @as(u8, @intCast(shown / 10 % 10));
+        buffer[len + 1] = '0' + @as(u8, @intCast(shown % 10));
+        return buffer[0 .. len + 2];
+    }
+    if (decimal_exponent >= 0) {
+        const whole: usize = @intCast(decimal_exponent + 1);
+        @memcpy(buffer[len..][0..whole], text[0..whole]);
+        len += whole;
+        if (significant > whole) {
+            buffer[len] = '.';
+            @memcpy(buffer[len + 1 ..][0 .. significant - whole], text[whole..significant]);
+            len += 1 + significant - whole;
+        }
+        return buffer[0..len];
+    }
+    const zeros: usize = @intCast(-decimal_exponent - 1);
+    @memcpy(buffer[len..][0..2], "0.");
+    len += 2;
+    @memset(buffer[len..][0..zeros], '0');
+    len += zeros;
+    @memcpy(buffer[len..][0..significant], text[0..significant]);
+    return buffer[0 .. len + significant];
+}
+
+fn power10(n: u32) u256 {
+    var result: u256 = 1;
+    for (0..n) |_| result *= 10;
+    return result;
+}
+
 // --------------------------------------------------------
 // Tests
 // --------------------------------------------------------
@@ -222,4 +354,30 @@ test "strtod reads the forms glibc reads" {
     try testing.expectEqual(@as(u64, nan_bits | 16), @as(u64, @bitCast(strtod("nan(0x10)"))));
     try testing.expect(std.math.isInf(strtod("-Infinity")));
     try testing.expectEqual(@as(f64, 5.0), strtod("5e"));
+}
+
+test "formatFloat prints nine significant digits as glibc's %.9g" {
+    const cases = [_]struct { f32, []const u8 }{
+        .{ 0.1, "0.100000001" },
+        .{ 1, "1" },
+        .{ -2.5, "-2.5" },
+        .{ 0.5, "0.5" },
+        .{ 1e10, "1e+10" },
+        .{ 0.0001, "9.99999975e-05" },
+        .{ 0.001, "0.00100000005" },
+        .{ 123456789.0, "123456792" },
+        .{ 1234567890.0, "1.23456794e+09" },
+        .{ std.math.floatMax(f32), "3.40282347e+38" },
+        .{ std.math.floatTrueMin(f32), "1.40129846e-45" },
+        .{ -0.0, "-0" },
+        .{ 0.0, "0" },
+        .{ std.math.inf(f32), "inf" },
+        .{ -std.math.inf(f32), "-inf" },
+        .{ std.math.nan(f32), "nan" },
+        .{ -std.math.nan(f32), "-nan" },
+    };
+    for (cases) |case| {
+        var buffer: [float_text_max]u8 = undefined;
+        try testing.expectEqualStrings(case[1], formatFloat(&buffer, case[0]));
+    }
 }

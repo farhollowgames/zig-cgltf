@@ -153,6 +153,38 @@ test "refusal: a token count whose array size overflows is out of memory" {
     }));
 }
 
+test "refusal: writing extras whose offsets lie outside the JSON" {
+    // cgltf writes extras without `data` from the JSON at their offsets,
+    // unchecked.
+    var gltf = try cgltf.parse(testing.allocator, "{\"asset\":{\"version\":\"2.0\"},\"extras\":{\"a\":1}}", .{});
+    defer gltf.deinit();
+    gltf.extras.data = null;
+    var out: std.Io.Writer.Discarding = .init(&.{});
+    try cgltf.write(&gltf, &out.writer);
+    gltf.extras.end_offset = gltf.json.len + 1;
+    try testing.expectError(error.OutOfBounds, cgltf.write(&gltf, &out.writer));
+    gltf.extras.start_offset = gltf.json.len;
+    gltf.extras.end_offset = 2;
+    try testing.expectError(error.OutOfBounds, cgltf.write(&gltf, &out.writer));
+}
+
+test "refusal: writing into an output too small for the text" {
+    // cgltf's snprintf calls move past a short buffer's end, and the next
+    // call writes past it.
+    var gltf = try cgltf.parse(testing.allocator, "{\"asset\":{\"version\":\"2.0\"}}", .{});
+    defer gltf.deinit();
+    var counter: std.Io.Writer.Discarding = .init(&.{});
+    try cgltf.write(&gltf, &counter.writer);
+    const size: usize = @intCast(counter.fullCount());
+    var buffer: [256]u8 = undefined;
+    for (0..size) |n| {
+        var out: std.Io.Writer = .fixed(buffer[0..n]);
+        try testing.expectError(error.WriteFailed, cgltf.write(&gltf, &out));
+    }
+    var out: std.Io.Writer = .fixed(buffer[0..size]);
+    try cgltf.write(&gltf, &out);
+}
+
 fn parseLoadValidate(allocator: std.mem.Allocator, path: [:0]const u8) !void {
     var gltf = try cgltf.parseFile(allocator, testing.io, path, .{});
     defer gltf.deinit();
