@@ -63,6 +63,15 @@ test "refusal: accessor reads past the buffer's memory" {
     try testing.expectError(error.OutOfBounds, cgltf.unpackFloats(&gltf, accessor, &all));
 }
 
+test "refusal: a view's data past the buffer's memory" {
+    var gltf = try parseLoaded(
+        \\{"asset":{"version":"2.0"},"buffers":[{"byteLength":4,"uri":"data:;base64,AAAAAA=="}],
+        \\"bufferViews":[{"buffer":0,"byteOffset":8,"byteLength":4}]}
+    );
+    defer gltf.deinit();
+    try testing.expectError(error.OutOfBounds, cgltf.bufferViewData(&gltf, 0));
+}
+
 test "refusal: unpacking indices of a vector accessor reads past its elements" {
     // cgltf reads count * components indices at one per element's stride.
     var gltf = try parseLoaded(

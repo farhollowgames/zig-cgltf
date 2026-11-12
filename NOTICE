@@ -1,0 +1,45 @@
+zig-cgltf
+Copyright 2026 Farhollow Games
+
+This product is licensed under the MIT licence (LICENSE). Its source is a
+translation to Zig of the works below. Each translated file names its
+source in its header. The translation keeps the original's checks, defaults
+and arithmetic, so that it gives the same results, and changes the
+language, the structure needed to express it in Zig, and the public
+interface.
+
+zig-cgltf is not affiliated with or reviewed by the authors of these works.
+The notices below are copied from the originals as they are.
+
+-------------------------------------------------------------------------------
+cgltf (src/cgltf.zig, src/types.zig, src/parse.zig, src/load.zig,
+src/validate.zig, src/accessor.zig, src/transform.zig)
+
+Translated from cgltf.h, https://github.com/jkuhlmann/cgltf (tag v1.15,
+commit 85cd62382dfea638278962690cf515023f33ed00), licensed under the MIT
+licence. From cgltf's LICENSE:
+
+    Copyright (c) 2018-2021 Johannes Kuhlmann
+
+-------------------------------------------------------------------------------
+jsmn (src/jsmn.zig)
+
+Translated from the copy of jsmn included in cgltf.h, which names its
+source as https://github.com/zserge/jsmn and its licence as MIT. From
+jsmn's LICENSE:
+
+    Copyright (c) 2010 Serge A. Zaitsev
+
+-------------------------------------------------------------------------------
+src/number.zig
+
+Written for zig-cgltf, not translated: it gives the results of the C
+library's atoi, atoll and atof, through which cgltf reads numbers, and its
+tests compare it with glibc's.
+
+-------------------------------------------------------------------------------
+reference/
+
+reference/cgltf/ is cgltf at the commit above, unmodified, with its own
+LICENSE. It and reference/shim/ are built only for the tests and the
+benchmark, and are not part of the package.

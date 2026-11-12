@@ -479,6 +479,11 @@ test "edges: buffers from data URIs, files and the BIN chunk load as the origina
         ,
         \\,"buffers":[{"byteLength":0,"uri":"data:;base64,"}]
         ,
+        // Sizes no allocator can give.
+        \\,"buffers":[{"byteLength":9223372036854775807,"uri":"data:;base64,AAEC"}]
+        ,
+        \\,"buffers":[{"byteLength":18446744073709551615,"uri":"data:;base64,AAEC"}]
+        ,
         \\,"buffers":[{"byteLength":3,"uri":"data:application/gltf-buffer,AAEC"}]
         ,
         \\,"buffers":[{"byteLength":3,"uri":"data:base64,AAEC"}]
