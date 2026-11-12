@@ -45,8 +45,15 @@ Every item's state:
 Written to resume from: the next agent reads this section and `git log`.
 
 - Steps 1 to 4: done, on `main`.
-- Steps 5 to 7 (performance pass, skeptic, fixes): on branch `review/perf-and-skeptic`, not
-  started.
+- Step 5 (performance pass): under way on `review/perf-and-skeptic`. Baseline, `--rounds 3`
+  at load average 26 to 33 (zig-cgltf ms / cgltf ms): decode base64 80.3 / 64.8, validate
+  34.0 / 9.1, unpack floats 128.4 / 97.7, read float 264.3 / 213.6, unpack indices
+  14.4 / 10.8. Kept, one commit each:
+  - validate: `indexBound` takes the largest index with 64-byte vectors, four at a time, one
+    function per index size: 34.0 to 4.4 ms (ratio 0.27 to 1.05). A `@bitCast` of a byte
+    array to a vector compiled to scalar shifts and made it three times slower; loading
+    through an `*align(1) const @Vector` pointer gives `vpmaxuw` on memory.
+- Steps 6 and 7 (skeptic, fixes): not started.
 
 Next steps, in order: on `review/perf-and-skeptic`, a fresh agent's performance pass (each
 change kept only with a benchmark gain and the oracle tests unchanged); a fresh skeptic's
