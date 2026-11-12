@@ -146,8 +146,8 @@ pub const Options = struct {
 
 /// cgltf's `cgltf_data`: the parsed file.
 pub const Gltf = struct {
-    /// Holds everything below except `file_data` and buffers read by the
-    /// file reader.
+    /// Holds everything below except `file_data` and the buffers'
+    /// `data`, which `deinit` frees as their `data_free_method` says.
     arena: std.heap.ArenaAllocator,
     file_type: FileType = .invalid,
     /// What `parseFile` read, released by `deinit`.
@@ -185,8 +185,11 @@ pub const Gltf = struct {
     pub fn deinit(gltf: *Gltf) void {
         const gpa = gltf.arena.child_allocator;
         for (gltf.buffers) |buffer| {
-            if (buffer.data_free_method == .file_release) {
-                if (buffer.data) |data| gltf.file_reader.release(gltf.file_reader.context, gpa, @constCast(data));
+            const data = @constCast(buffer.data orelse continue);
+            switch (buffer.data_free_method) {
+                .none => {},
+                .file_release => gltf.file_reader.release(gltf.file_reader.context, gpa, data),
+                .memory_free => gpa.free(data),
             }
         }
         if (gltf.file_data) |data| gltf.file_reader.release(gltf.file_reader.context, gpa, data);

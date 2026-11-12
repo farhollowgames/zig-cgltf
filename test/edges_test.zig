@@ -33,14 +33,14 @@ fn expectSameJson(fragment: []const u8) !void {
     const gpa = testing.allocator;
     const json = try document(gpa, fragment);
     defer gpa.free(json);
-    oracle.expectSame(gpa, testing.io, .{ .bytes = .{ .data = json } }, .{}) catch |err| {
+    _ = oracle.expectSame(gpa, testing.io, .{ .bytes = .{ .data = json } }, .{}) catch |err| {
         std.debug.print("case: {s}\n", .{fragment});
         return err;
     };
 }
 
 fn expectSameRaw(bytes: []const u8, options: oracle.Options) !void {
-    oracle.expectSame(testing.allocator, testing.io, .{ .bytes = .{ .data = bytes } }, options) catch |err| {
+    _ = oracle.expectSame(testing.allocator, testing.io, .{ .bytes = .{ .data = bytes } }, options) catch |err| {
         std.debug.print("case: {x}\n", .{bytes});
         return err;
     };
@@ -519,7 +519,7 @@ test "edges: files beside the glTF load as the original's" {
         "{\"asset\":{\"version\":\"2.0\"},\"buffers\":[{\"byteLength\":648,\"uri\":\"../Box/glTF/Box0.bin\"}]}",
     };
     for (cases) |case| {
-        oracle.expectSame(gpa, io, .{ .bytes = .{ .data = case, .gltf_path = box } }, .{}) catch |err| {
+        _ = oracle.expectSame(gpa, io, .{ .bytes = .{ .data = case, .gltf_path = box } }, .{}) catch |err| {
             std.debug.print("case: {s}\n", .{case});
             return err;
         };

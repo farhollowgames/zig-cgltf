@@ -215,7 +215,9 @@ pub fn loadBuffers(gltf: *Gltf, io: Io, gltf_path: ?[]const u8) Error!void {
                 return error.UnknownFormat;
             }
             buffer.data_free_method = .memory_free;
-            buffer.data = try loadBufferBase64(gltf.arena.allocator(), buffer.size, uri[comma + 1 ..]);
+            // From `gpa`, not the arena: the size is the file's, and can be
+            // more than any allocator can give.
+            buffer.data = try loadBufferBase64(gpa, buffer.size, uri[comma + 1 ..]);
         } else if (std.mem.indexOf(u8, uri, "://") == null and gltf_path != null) {
             const memory = try gpa.alloc(u8, pathSize(gltf_path.?, uri));
             defer gpa.free(memory);

@@ -264,6 +264,17 @@ fn floatsEqual(a: []const f32, b: []const f32) bool {
     return std.mem.eql(u8, std.mem.sliceAsBytes(a), std.mem.sliceAsBytes(b));
 }
 
+/// Bits equal, or both NaN: for floats computed from NaN, which keep one
+/// operand's NaN or the other's as each compiler orders the operands of
+/// an addition or a product. Neither C nor Zig fixes the order.
+fn computedFloatsEqual(a: []const f32, b: []const f32) bool {
+    for (a, b) |x, y| {
+        if (std.math.isNan(x) and std.math.isNan(y)) continue;
+        if (@as(u32, @bitCast(x)) != @as(u32, @bitCast(y))) return false;
+    }
+    return true;
+}
+
 /// Every accessor helper on every element of every accessor, every
 /// node's transforms, every attribute's lookup and every view's data,
 /// on both sides. A helper the port refuses with `OutOfBounds` is not run
@@ -291,10 +302,12 @@ pub fn expectSameHelpers(gpa: std.mem.Allocator, original: *const c.cgltf_data, 
         const cn = &original.nodes[n];
         var expected: [16]f32 = undefined;
         c.cgltf_node_transform_local(cn, &expected);
-        if (!floatsEqual(&expected, &cgltf.transformLocal(node))) return fail("node {d} local transform", .{n});
+        if (!computedFloatsEqual(&expected, &cgltf.transformLocal(node))) return fail("node {d} local transform", .{n});
         const world = cgltf.transformWorld(port, @intCast(n)) catch continue;
         c.cgltf_node_transform_world(cn, &expected);
-        if (!floatsEqual(&expected, &world)) return fail("node {d} world transform", .{n});
+        if (!computedFloatsEqual(&expected, &world)) {
+            return fail("node {d} world transform: original {any}, port {any}", .{ n, expected, world });
+        }
     }
     for (port.meshes, 0..) |*mesh, m| {
         for (mesh.primitives, 0..) |*primitive, p| {

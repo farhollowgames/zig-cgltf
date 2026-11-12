@@ -19,8 +19,11 @@ pub const Options = struct {
     json_token_count: usize = 0,
 };
 
+/// How far an input went before both refused it.
+pub const Reached = enum { refused, parsed, loaded, valid };
+
 /// Runs `source` through both and fails on the first difference.
-pub fn expectSame(gpa: std.mem.Allocator, io: std.Io, source: Source, options: Options) !void {
+pub fn expectSame(gpa: std.mem.Allocator, io: std.Io, source: Source, options: Options) !Reached {
     var c_options = std.mem.zeroes(c.cgltf_options);
     c_options.type = @backingInt(options.file_type);
     c_options.json_token_count = options.json_token_count;
@@ -50,7 +53,7 @@ pub fn expectSame(gpa: std.mem.Allocator, io: std.Io, source: Source, options: O
     };
     defer if (port) |*gltf| gltf.deinit() else |_| {};
     try compare.expectResult("parse", parsed, if (port) |_| {} else |err| err);
-    const gltf = if (port) |*gltf| gltf else |_| return;
+    const gltf = if (port) |*gltf| gltf else |_| return .refused;
     try compare.expectSameData(original, gltf);
     try expectSameExtras(original, gltf);
 
@@ -64,7 +67,35 @@ pub fn expectSame(gpa: std.mem.Allocator, io: std.Io, source: Source, options: O
         try compare.expectResult("validate", c.cgltf_validate(original), port_valid);
     }
     try compare.expectSameHelpers(gpa, original, gltf);
+    if (port_loaded) |_| {} else |_| return .parsed;
+    if (port_valid) |_| {} else |_| return .loaded;
+    return .valid;
 }
+
+/// Counts of how far fuzz cases went.
+pub const Tally = struct {
+    counts: std.EnumArray(Reached, usize) = .initFill(0),
+
+    pub fn add(tally: *Tally, reached: Reached) void {
+        tally.counts.getPtr(reached).* += 1;
+    }
+
+    /// Fails unless at least `min_valid` cases were valid and a tenth as
+    /// many failed after parsing, so the fuzzer reaches every step.
+    pub fn expectReach(tally: *const Tally, name: []const u8, min_valid: usize) !void {
+        const counts = tally.counts;
+        std.debug.print("{s}: refused {d}, parsed {d}, loaded {d}, valid {d}\n", .{
+            name,
+            counts.get(.refused),
+            counts.get(.parsed),
+            counts.get(.loaded),
+            counts.get(.valid),
+        });
+        if (counts.get(.valid) < min_valid or counts.get(.loaded) + counts.get(.parsed) < min_valid / 10) {
+            return error.FuzzTooNarrow;
+        }
+    }
+};
 
 fn expectSameExtras(original: [*c]const c.cgltf_data, port: *const cgltf.Gltf) !void {
     try compare.expectSameExtrasCopy(original, port, &port.extras, &original.*.extras);
