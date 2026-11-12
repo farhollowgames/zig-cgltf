@@ -241,6 +241,12 @@ fn cString(text: []const u8) []const u8 {
     return text[0 .. std.mem.indexOfScalar(u8, text, 0) orelse text.len];
 }
 
+const indent_levels = 32;
+/// A comma, a new line and the spaces of `indent_levels` levels, and one
+/// space more, so that a block of `indent_text.len - 1` bytes can start at
+/// the comma or at the new line.
+const indent_text = ",\n" ++ @as([2 * indent_levels + 1]u8, @splat(' '));
+
 const Context = struct {
     out: *Io.Writer,
     gltf: *const Gltf,
@@ -249,11 +255,23 @@ const Context = struct {
     extensions_used: ExtensionSet = .empty,
     extensions_required: ExtensionSet = .empty,
 
+    /// A comma when one is due, a new line, and two spaces a level. Up to
+    /// `indent_levels` levels, with room in the writer's buffer, it copies
+    /// a fixed-size block and keeps the part that counts.
     fn indent(c: *Context) WriteError!void {
-        try c.out.writeAll(if (c.needs_comma) ",\n" else "\n");
+        const levels: usize = @intCast(@max(c.depth, 0));
+        const start: usize = if (c.needs_comma) 0 else 1;
         c.needs_comma = false;
-        var level: i32 = 0;
-        while (level < c.depth) : (level += 1) try c.out.writeAll("  ");
+        const block = indent_text.len - 1;
+        const unused = c.out.unusedCapacitySlice();
+        if (levels <= indent_levels and unused.len >= block) {
+            unused[0..block].* = indent_text[start..][0..block].*;
+            c.out.advance(2 + 2 * levels - start);
+            return;
+        }
+        const shown = @min(levels, indent_levels);
+        try c.out.writeAll(indent_text[start .. 2 + 2 * shown]);
+        if (levels > shown) try c.out.splatBytesAll("  ", levels - shown);
     }
 
     /// A line of its own: one that starts with a closing bracket ends a
