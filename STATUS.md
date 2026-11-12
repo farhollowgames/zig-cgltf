@@ -100,10 +100,15 @@ Written to resume from: the next agent reads this section and `git log`.
   copy (to 5.80), comptime property names written as literals (to 5.95 to 6.18), and
   integers and string values without `print` (to 6.79 to 6.98). Dropped, with no clear
   gain: formatting floats straight into the writer's buffer, and `formatFloat`'s digits
-  in pairs with a vector scan for the trailing zeros. Not yet done: the skeptic and the
-  fixes, and the docs.
+  in pairs with a vector scan for the trailing zeros.
+- The writer's skeptic (step 6) and fixes (step 7): the indent's fixed-size copy wrote spaces
+  past the text into the caller's buffer, where cgltf leaves it alone; each length now has
+  its own fixed-size copy (write row 6.91 after it). Tests added for a BIN chunk that needs
+  padding and for extras on every object, both gaps that let mutations pass. Documented in
+  `doc/parity.md`: `writeFile`'s `IoError`, extras whose JSON range holds a NUL, the C
+  locale, and the GLB total on 64-bit big-endian machines.
 
-Next steps: a fresh skeptic for the writer, the fixes, then README, `doc/` and this file; then the author reviews both branches and the open points,
+Next steps: README and `doc/` for the writer; then the author reviews both branches and the open points,
 and the release: merge, tag `v0.1.0`, and the release notes.
 
 ## Tests
@@ -137,6 +142,9 @@ The tests the tables name, by short name:
 | write-samples | `write: every sample model writes as the original writes it` |
 | write-again | `write: every sample model's text parses again in both, as the original's` |
 | write-files | `write: files of every sample model, as glTF and GLB, are the original's`, and `write: a file that cannot be created is not found, as the original's` |
+| write-glb | `write: a GLB whose BIN chunk needs padding is the original's` |
+| write-extras | `write: extras on every object write as the original writes them` |
+| write-output | `write: the output's bytes past the text are left as the original leaves them` |
 | write-fuzz | `fuzz: random glTF documents write as the original writes them, and parse again` |
 | write-refusals | the two `refusal: writing` tests |
 | write-unit | the unit tests in `src/write.zig` |
@@ -222,11 +230,11 @@ From `cgltf_write.h`, on branch `port/writer`.
 
 | upstream | zig-cgltf | tests | state |
 | --- | --- | --- | --- |
-| `cgltf_write` into a buffer | `write` to an `std.Io.Writer` | write-samples, write-again, write-fuzz, write-unit | benchmarked |
-| `cgltf_write` with no buffer (the size) | `write` to an `std.Io.Writer.Discarding` | write-samples, write-refusals | oracle-tested |
-| `cgltf_write_file`, glTF and GLB | `writeFile` | write-files | oracle-tested |
-| every object, extension and extras the writer writes | as upstream | write-samples, write-fuzz | oracle-tested |
-| `%.9g` through `snprintf` | `number.formatFloat` | floats | oracle-tested |
+| `cgltf_write` into a buffer | `write` to an `std.Io.Writer` | write-samples, write-again, write-fuzz, write-output, write-unit | reviewed |
+| `cgltf_write` with no buffer (the size) | `write` to an `std.Io.Writer.Discarding` | write-samples, write-refusals | reviewed |
+| `cgltf_write_file`, glTF and GLB | `writeFile` | write-files, write-glb | reviewed |
+| every object, extension and extras the writer writes | as upstream | write-samples, write-fuzz, write-extras | reviewed |
+| `%.9g` through `snprintf` | `number.formatFloat` | floats | reviewed |
 
 ## Left out
 

@@ -157,7 +157,9 @@ fn writeFileTo(gltf: *const Gltf, out: *Io.Writer, file_type: types.FileType) Wr
     var total = glb_header_size + glb_chunk_header_size + json_size + json_pad;
     if (bin.len > 0) total += glb_chunk_header_size + bin.len + bin_pad;
 
-    // cgltf copies the low four bytes of each size, in the machine's order.
+    // Each size is its low 32 bits in the machine's order, as cgltf writes
+    // them on a little-endian machine; on a 64-bit big-endian one, cgltf copies
+    // the high half of the total.
     try out.writeInt(u32, glb_magic, .native);
     try out.writeInt(u32, glb_version, .native);
     try out.writeInt(u32, @truncate(total), .native);
@@ -242,10 +244,8 @@ fn cString(text: []const u8) []const u8 {
 }
 
 const indent_levels = 32;
-/// A comma, a new line and the spaces of `indent_levels` levels, and one
-/// space more, so that a block of `indent_text.len - 1` bytes can start at
-/// the comma or at the new line.
-const indent_text = ",\n" ++ @as([2 * indent_levels + 1]u8, @splat(' '));
+/// A comma, a new line and the spaces of `indent_levels` levels.
+const indent_text = ",\n" ++ @as([2 * indent_levels]u8, @splat(' '));
 
 const Context = struct {
     out: *Io.Writer,
@@ -257,16 +257,21 @@ const Context = struct {
 
     /// A comma when one is due, a new line, and two spaces a level. Up to
     /// `indent_levels` levels, with room in the writer's buffer, it copies
-    /// a fixed-size block and keeps the part that counts.
+    /// the text as a copy of fixed size, one for each length.
     fn indent(c: *Context) WriteError!void {
         const levels: usize = @intCast(@max(c.depth, 0));
         const start: usize = if (c.needs_comma) 0 else 1;
         c.needs_comma = false;
-        const block = indent_text.len - 1;
         const unused = c.out.unusedCapacitySlice();
-        if (levels <= indent_levels and unused.len >= block) {
-            unused[0..block].* = indent_text[start..][0..block].*;
-            c.out.advance(2 + 2 * levels - start);
+        if (levels <= indent_levels and unused.len >= indent_text.len) {
+            const len = 2 + 2 * levels - start;
+            switch (len) {
+                inline 1...indent_text.len => |n| {
+                    unused[0..n].* = indent_text[start..][0..n].*;
+                },
+                else => unreachable,
+            }
+            c.out.advance(len);
             return;
         }
         const shown = @min(levels, indent_levels);

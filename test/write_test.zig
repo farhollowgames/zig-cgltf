@@ -190,3 +190,94 @@ test "write: a file that cannot be created is not found, as the original's" {
     try testing.expect(c.cgltf_write_file(&options, path, original) == c.cgltf_result_file_not_found);
     try testing.expectError(error.FileNotFound, cgltf.writeFile(&gltf, testing.io, path, .gltf));
 }
+
+test "write: the output's bytes past the text are left as the original leaves them" {
+    const json = "{\"asset\":{\"version\":\"2.0\"}}";
+    var gltf = try cgltf.parse(testing.allocator, json, .{});
+    defer gltf.deinit();
+    var options = std.mem.zeroes(c.cgltf_options);
+    var original: [*c]c.cgltf_data = null;
+    try testing.expect(c.cgltf_parse(&options, json.ptr, json.len, &original) == c.cgltf_result_success);
+    defer c.cgltf_free(original);
+    var expected: [256]u8 = @splat(0xAA);
+    const size = c.cgltf_write(&options, &expected, expected.len, original);
+    var actual: [256]u8 = @splat(0xAA);
+    var out: std.Io.Writer = .fixed(&actual);
+    try cgltf.write(&gltf, &out);
+    try testing.expectEqual(size - 1, out.end);
+    // cgltf's NUL, which the port leaves out as documented.
+    actual[size - 1] = 0;
+    try testing.expectEqualSlices(u8, &expected, &actual);
+}
+
+test "write: a GLB whose BIN chunk needs padding is the original's" {
+    // No sample GLB has a BIN chunk whose length is not a multiple of four,
+    // so the BIN padding is never written by the file tests.
+    const json = "{\"asset\":{\"version\":\"2.0\"},\"buffers\":[{\"byteLength\":5}]}";
+    var gltf = try cgltf.parse(testing.allocator, json, .{});
+    defer gltf.deinit();
+    var options = std.mem.zeroes(c.cgltf_options);
+    var original: [*c]c.cgltf_data = null;
+    try testing.expect(c.cgltf_parse(&options, json.ptr, json.len, &original) == c.cgltf_result_success);
+    defer c.cgltf_free(original);
+    const bin = [_]u8{ 1, 2, 3, 4, 5 };
+    original.*.bin = &bin;
+    original.*.bin_size = bin.len;
+    defer original.*.bin = null;
+    gltf.bin = &bin;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const gpa = testing.allocator;
+    const dir = try std.fs.path.join(gpa, &.{ ".zig-cache", "tmp", &tmp.sub_path });
+    defer gpa.free(dir);
+    const original_path = try std.fs.path.joinZ(gpa, &.{ dir, "original.glb" });
+    defer gpa.free(original_path);
+    const port_path = try std.fs.path.join(gpa, &.{ dir, "port.glb" });
+    defer gpa.free(port_path);
+    var glb_options = std.mem.zeroes(c.cgltf_options);
+    glb_options.type = c.cgltf_file_type_glb;
+    try testing.expect(c.cgltf_write_file(&glb_options, original_path, original) == c.cgltf_result_success);
+    try cgltf.writeFile(&gltf, testing.io, port_path, .glb);
+    const cwd = std.Io.Dir.cwd();
+    const expected = try cwd.readFileAlloc(testing.io, original_path, gpa, .unlimited);
+    defer gpa.free(expected);
+    const actual = try cwd.readFileAlloc(testing.io, port_path, gpa, .unlimited);
+    defer gpa.free(actual);
+    try testing.expectEqualSlices(u8, expected, actual);
+}
+
+test "write: extras on every object write as the original writes them" {
+    // The sample models have extras only on the asset, meshes and nodes,
+    // and the documents fuzz adds materials, accessors and primitives: the
+    // other objects' extras are never written by the oracle tests.
+    // cgltf reads a channel's extras from inside its target.
+    const json =
+        \\{"asset":{"version":"2.0","extras":1},
+        \\"buffers":[{"byteLength":4,"extras":2}],
+        \\"bufferViews":[{"buffer":0,"byteLength":4,"extras":3}],
+        \\"accessors":[{"bufferView":0,"componentType":5126,"count":1,"type":"SCALAR","extras":4}],
+        \\"images":[{"uri":"a.png","extras":5}],
+        \\"samplers":[{"extras":6}],
+        \\"textures":[{"source":0,"sampler":0,"extras":7}],
+        \\"materials":[{"extras":8}],
+        \\"meshes":[{"primitives":[{"attributes":{"POSITION":0},"extensions":{"KHR_materials_variants":{"mappings":[{"material":0,"variants":[0],"extras":9}]}},"extras":10}],"extras":11}],
+        \\"nodes":[{"extras":12}],
+        \\"scenes":[{"nodes":[0],"extras":13}],
+        \\"skins":[{"joints":[0],"extras":14}],
+        \\"animations":[{"samplers":[{"input":0,"output":0,"extras":15}],"channels":[{"sampler":0,"target":{"node":0,"path":"translation","extras":16}}],"extras":17}],
+        \\"cameras":[{"perspective":{"yfov":1,"znear":0.1,"extras":18},"extras":19},{"orthographic":{"xmag":1,"ymag":1,"zfar":2,"znear":1,"extras":20}}],
+        \\"extensions":{"KHR_lights_punctual":{"lights":[{"type":"point","extras":21}]},"KHR_materials_variants":{"variants":[{"name":"v","extras":22}]}},
+        \\"extras":23}
+    ;
+    const gpa = testing.allocator;
+    var gltf = try cgltf.parse(gpa, json, .{});
+    defer gltf.deinit();
+    var options = std.mem.zeroes(c.cgltf_options);
+    var original: [*c]c.cgltf_data = null;
+    try testing.expect(c.cgltf_parse(&options, json.ptr, json.len, &original) == c.cgltf_result_success);
+    defer c.cgltf_free(original);
+    const text = try expectSameText(gpa, original, &gltf);
+    defer gpa.free(text);
+    // Every one of the 23 extras is in the text.
+    try testing.expectEqual(@as(usize, 23), std.mem.count(u8, text, "\"extras\": "));
+}
