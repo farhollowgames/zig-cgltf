@@ -283,7 +283,7 @@ const Context = struct {
             c.needs_comma = false;
         }
         try c.indent();
-        try c.out.writeAll(text);
+        try c.literal(text);
         if (closes) c.needs_comma = true;
         const last = text[text.len - 1];
         if (last == '[' or last == '{') {
@@ -292,13 +292,31 @@ const Context = struct {
         }
     }
 
+    /// Text known at compile time, copied as a fixed-size block when the
+    /// writer's buffer has the room.
+    fn literal(c: *Context, comptime text: []const u8) WriteError!void {
+        const unused = c.out.unusedCapacitySlice();
+        if (unused.len >= text.len) {
+            unused[0..text.len].* = text[0..text.len].*;
+            c.out.advance(text.len);
+            return;
+        }
+        try c.out.writeAll(text);
+    }
+
     /// Opens a property: a new line, then the label in quotes.
-    fn label(c: *Context, name: []const u8) WriteError!void {
+    fn label(c: *Context, comptime name: []const u8) WriteError!void {
+        try c.indent();
+        try c.literal("\"" ++ comptime cString(name) ++ "\": ");
+    }
+
+    /// `label` for a name known only at run time.
+    fn labelText(c: *Context, name: []const u8) WriteError!void {
         try c.indent();
         try c.out.print("\"{s}\": ", .{cString(name)});
     }
 
-    fn strProp(c: *Context, name: []const u8, value: ?[]const u8) WriteError!void {
+    fn strProp(c: *Context, comptime name: []const u8, value: ?[]const u8) WriteError!void {
         const text = value orelse return;
         try c.label(name);
         try c.out.print("\"{s}\"", .{cString(text)});
@@ -311,14 +329,19 @@ const Context = struct {
         c.needs_comma = true;
     }
 
-    fn intProp(c: *Context, name: []const u8, value: i32, default: i32) WriteError!void {
+    fn intProp(c: *Context, comptime name: []const u8, value: i32, default: i32) WriteError!void {
         if (value == default) return;
         try c.label(name);
         try c.out.print("{d}", .{value});
         c.needs_comma = true;
     }
 
-    fn sizeProp(c: *Context, name: []const u8, value: usize, default: usize) WriteError!void {
+    fn sizeProp(
+        c: *Context,
+        comptime name: []const u8,
+        value: usize,
+        default: usize,
+    ) WriteError!void {
         if (value == default) return;
         try c.label(name);
         try c.out.print("{d}", .{value});
@@ -328,7 +351,7 @@ const Context = struct {
     /// A `size_t` property cgltf passes through an `int` first.
     fn sizePropFromInt(
         c: *Context,
-        name: []const u8,
+        comptime name: []const u8,
         value: usize,
         default: usize,
     ) WriteError!void {
@@ -336,7 +359,12 @@ const Context = struct {
         try c.sizeProp(name, sign_extended, default);
     }
 
-    fn boolProp(c: *Context, name: []const u8, value: bool, default: bool) WriteError!void {
+    fn boolProp(
+        c: *Context,
+        comptime name: []const u8,
+        value: bool,
+        default: bool,
+    ) WriteError!void {
         if (value == default) return;
         try c.label(name);
         try c.out.writeAll(if (value) "true" else "false");
@@ -348,14 +376,14 @@ const Context = struct {
         try c.out.writeAll(number.formatFloat(&buffer, value));
     }
 
-    fn floatProp(c: *Context, name: []const u8, value: f32, default: f32) WriteError!void {
+    fn floatProp(c: *Context, comptime name: []const u8, value: f32, default: f32) WriteError!void {
         if (value == default) return;
         try c.label(name);
         try c.float(value);
         c.needs_comma = true;
     }
 
-    fn floatArrayProp(c: *Context, name: []const u8, values: []const f32) WriteError!void {
+    fn floatArrayProp(c: *Context, comptime name: []const u8, values: []const f32) WriteError!void {
         try c.label(name);
         try c.out.writeAll("[");
         for (values, 0..) |value, i| {
@@ -375,7 +403,7 @@ const Context = struct {
         return false;
     }
 
-    fn indexProp(c: *Context, name: []const u8, index: ?u32) WriteError!void {
+    fn indexProp(c: *Context, comptime name: []const u8, index: ?u32) WriteError!void {
         const i = index orelse return;
         if (i == invalid_index) return;
         try c.label(name);
@@ -383,7 +411,11 @@ const Context = struct {
         c.needs_comma = true;
     }
 
-    fn indexArrayProp(c: *Context, name: []const u8, indices: ?[]const u32) WriteError!void {
+    fn indexArrayProp(
+        c: *Context,
+        comptime name: []const u8,
+        indices: ?[]const u32,
+    ) WriteError!void {
         const items = indices orelse return;
         try c.label(name);
         try c.out.writeAll("[");
@@ -463,7 +495,12 @@ const Context = struct {
     }
 
     fn attributes(c: *Context, items: []const types.Attribute) WriteError!void {
-        for (items) |attribute| try c.indexProp(attribute.name, attribute.data);
+        for (items) |attribute| {
+            if (attribute.data == invalid_index) continue;
+            try c.labelText(attribute.name);
+            try c.out.print("{d}", .{cInt(attribute.data)});
+            c.needs_comma = true;
+        }
     }
 
     fn writePrimitive(c: *Context, primitive: *const types.Primitive) WriteError!void {
