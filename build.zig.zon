@@ -1,0 +1,24 @@
+.{
+    .name = .cgltf,
+    .version = "0.1.0",
+    .fingerprint = 0x100e7fe16d8b73fb, // Changing this has security and trust implications.
+    .minimum_zig_version = "0.17.0",
+    .dependencies = .{
+        // Khronos's sample models, fetched only for the differential tests
+        // and the benchmark.
+        .gltf_sample_assets = .{
+            .url = "git+https://github.com/KhronosGroup/glTF-Sample-Assets#8f492390ddc7a2ae221a1369ef560589cf8c70fb",
+            .hash = "N-V-__8AAOFGeFUum_PGnnM2i07LypqjZJE5CqqqtQ7yR7SE",
+            .lazy = true,
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        ".zigversion",
+        "src",
+        "LICENSE",
+        "NOTICE",
+        "README.md",
+    },
+}
