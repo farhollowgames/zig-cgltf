@@ -1,5 +1,20 @@
 # Status
 
+## Performance pass on the slower rows
+
+Done on `port/writer`, pushed, one commit each with its bench before and after: world
+transforms with `@Vector` columns in cgltf's order of float operations (0.77 to 1.19),
+`readIndex` choosing the component type once (0.95 to 1.22), and `readUint` choosing the
+element and component type once (0.95 to 1.35), with a new `read uint` bench row. Measured
+row by row with `--filter` and `--rounds 5`, before and after in the same run, at a load of
+30 to 36. `zig build test` runs 67, all passing; the oracle tests are unedited.
+
+Left: `validate` is still slower, 0.91 (5.70 ms against 5.19) in the last run. A profile
+splits the port's time about evenly between `indexBound` and the per-accessor checks
+around it, with no single hot spot; not changed. The results table in
+`doc/BENCHMARKS.md` is from before this pass; a full `--rounds 3` run on a quieter machine
+should replace it.
+
 ## Writer report
 
 Done: `cgltf_write.h` ported on branch `port/writer` (from `review/perf-and-skeptic`), pushed,

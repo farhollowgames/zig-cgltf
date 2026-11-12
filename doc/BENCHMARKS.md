@@ -31,6 +31,7 @@ The rows:
 | validate | `validate` of every model, parsed and loaded beforehand |
 | unpack floats | `unpackFloats` of every accessor |
 | read float | `readFloat` of every element of every accessor, into 16 floats |
+| read uint | `readUint` of every element of every accessor, into 4 integers |
 | unpack indices | `unpackIndices` into `u32` of every scalar, unsigned, non-sparse accessor |
 | read index | `readIndex` of every element of those accessors |
 | world transforms | `transformWorld` of every node |
@@ -85,11 +86,22 @@ rows move with the load from run to run.
   one character at a time.
 - **validate**: both sides spend most of the time in the index bound loop, which is now
   vectorized on both and bound by memory; the row moves between 0.89 and 1.05 from run to
-  run.
+  run (0.91 in the last). A profile splits the port's time about evenly between the index
+  bound and the per-accessor checks around it.
 - **write**: cgltf formats every value with `snprintf`; the port writes property names as
   constants, integers two digits at a time, and floats with its own `%.9g` (`formatFloat`),
   which works from the float's binary exponent with integer multiplies.
-- **world transforms**: 31% slower, not yet looked into; the row takes under half a
-  millisecond over all 339 models.
+- **world transforms**: the local transform's rotation columns and the parent product are
+  written with `@Vector`, in cgltf's order of float operations, so the bits match.
+- The results table above predates the last performance pass (world transforms, read index,
+  read uint). That pass measured its rows alone, `--filter` and `--rounds 5`, the two sides in
+  one run, at a load of 30 to 36 on 32 hardware threads:
+
+  | feature | before | after |
+  | --- | ---: | ---: |
+  | world transforms | 0.77 | 1.19 |
+  | read index | 0.95, 0.96 | 1.21, 1.23 |
+  | read uint | 0.94, 0.96 | 1.33, 1.38 |
+
 - The sample models are one input set. Files with much larger buffers or many more nodes may
   give other ratios.
