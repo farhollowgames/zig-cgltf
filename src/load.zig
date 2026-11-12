@@ -176,16 +176,21 @@ pub fn decodeUri(uri: [:0]u8) usize {
     return write;
 }
 
-/// The path of `uri` beside `gltf_path`: everything up to its last `/` or
-/// `\`, then the URI with its `%XX` escapes decoded.
-fn combinePaths(gpa: Allocator, gltf_path: []const u8, uri: []const u8) Error![:0]u8 {
+/// The path of `uri` beside `gltf_path`, in `memory`: everything up to
+/// its last `/` or `\`, then the URI with its `%XX` escapes decoded.
+/// `memory` is `pathSize` bytes.
+fn combinePaths(memory: []u8, gltf_path: []const u8, uri: []const u8) []const u8 {
     const slash = std.mem.lastIndexOfAny(u8, gltf_path, "/\\");
     const prefix = if (slash) |at| at + 1 else 0;
-    const path = try gpa.allocSentinel(u8, prefix + uri.len, 0);
-    @memcpy(path[0..prefix], gltf_path[0..prefix]);
-    @memcpy(path[prefix..], uri);
-    const decoded = decodeUri(path[prefix..]);
-    return path[0 .. prefix + decoded :0];
+    @memcpy(memory[0..prefix], gltf_path[0..prefix]);
+    @memcpy(memory[prefix..][0..uri.len], uri);
+    memory[prefix + uri.len] = 0;
+    const decoded = decodeUri(memory[prefix .. prefix + uri.len :0]);
+    return memory[0 .. prefix + decoded];
+}
+
+fn pathSize(gltf_path: []const u8, uri: []const u8) usize {
+    return gltf_path.len + uri.len + 1;
 }
 
 /// cgltf's `cgltf_load_buffers`: points the first buffer of a GLB at its
@@ -212,8 +217,9 @@ pub fn loadBuffers(gltf: *Gltf, io: Io, gltf_path: ?[]const u8) Error!void {
             buffer.data_free_method = .memory_free;
             buffer.data = try loadBufferBase64(gltf.arena.allocator(), buffer.size, uri[comma + 1 ..]);
         } else if (std.mem.indexOf(u8, uri, "://") == null and gltf_path != null) {
-            const path = try combinePaths(gpa, gltf_path.?, uri);
-            defer gpa.free(path);
+            const memory = try gpa.alloc(u8, pathSize(gltf_path.?, uri));
+            defer gpa.free(memory);
+            const path = combinePaths(memory, gltf_path.?, uri);
             buffer.data_free_method = .file_release;
             const reader = gltf.file_reader;
             buffer.data = try reader.read(reader.context, gpa, io, path, buffer.size);

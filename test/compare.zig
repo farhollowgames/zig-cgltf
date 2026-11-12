@@ -159,8 +159,10 @@ pub const Comparer = struct {
         } else if (Z == bool) {
             if ((original != 0) != port) return fail("{s}: original {d}, port {}", .{ where, original, port });
         } else if (@typeInfo(Z) == .@"enum") {
-            const z: i64 = @backingInt(port);
-            if (@as(i64, original) != z) return fail("{s}: original {d}, port {d}", .{ where, original, z });
+            // The bits: cgltf's enums are unsigned, where the port keeps
+            // glTF's signed numbers for filters and wrap modes.
+            const z: C = @bitCast(@backingInt(port));
+            if (original != z) return fail("{s}: original {d}, port {d}", .{ where, original, z });
         } else if (@typeInfo(Z) == .int) {
             if (@as(i128, original) != @as(i128, port)) return fail("{s}: original {d}, port {d}", .{ where, original, port });
         } else {

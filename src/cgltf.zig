@@ -17,6 +17,10 @@ const check = @import("validate.zig");
 const accessor = @import("accessor.zig");
 const transform = @import("transform.zig");
 
+/// The C library's `atoi`, `atoll` and `atof` as glibc reads text in the C
+/// locale, which cgltf reads every JSON number with.
+pub const number = @import("number.zig");
+
 pub const invalid_index = types.invalid_index;
 pub const FileType = types.FileType;
 pub const BufferViewType = types.BufferViewType;
@@ -322,7 +326,7 @@ pub fn calcSize(t: Type, component_type: ComponentType) usize {
 }
 
 test {
-    _ = @import("number.zig");
+    _ = number;
     _ = @import("jsmn.zig");
     _ = parse_json;
     _ = load;

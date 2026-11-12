@@ -4,4 +4,6 @@
 
 comptime {
     _ = @import("samples_test.zig");
+    _ = @import("edges_test.zig");
+    _ = @import("functions_test.zig");
 }
