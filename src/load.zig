@@ -155,22 +155,26 @@ fn unhex(c: u8) i32 {
 }
 
 /// cgltf's `cgltf_decode_string`: decodes the JSON escapes of `string` in
-/// place, writes a NUL after the result and returns its length. An escape
-/// cut off by the end of the string is `error.OutOfBounds`: cgltf reads
-/// past the end there. A `\u` escape with other characters than hex
+/// place, up to its first NUL, and returns the decoded text, with a NUL
+/// written after it. The decoded text is shorter than `string` when there
+/// were escapes, so a slice kept from before, such as a name in a `Gltf`,
+/// keeps its old length: take the returned slice in its place. An escape
+/// that runs past the NUL at `string.len` is `error.OutOfBounds`: cgltf
+/// reads past the end there. A `\u` escape with other characters than hex
 /// digits decodes as cgltf decodes it, from their value of -1.
-pub fn decodeString(string: [:0]u8) Error!usize {
+pub fn decodeString(string: [:0]u8) Error![:0]u8 {
     const len = string.len;
-    var read = std.mem.indexOfScalar(u8, string, '\\') orelse return len;
+    var read = try spanToEscape(string, 0);
+    if (string[read] == 0) return string[0..read :0];
     var write: usize = 0;
     var last: usize = 0;
     while (true) {
         const written = read - last;
         std.mem.copyForwards(u8, string[write..][0..written], string[last..read]);
         write += written;
-        if (read == len) break;
+        if (string[read] == 0) break;
+        // `read` was at a backslash, before the NUL at `len`.
         read += 1;
-        if (read == len) return error.OutOfBounds;
         const escape = string[read];
         read += 1;
         switch (escape) {
@@ -189,12 +193,13 @@ pub fn decodeString(string: [:0]u8) Error!usize {
                 write += 1;
             },
             'u' => {
-                if (len - read < 4) return error.OutOfBounds;
+                // The four characters may include the NUL at `len`.
+                if (read + 4 > len + 1) return error.OutOfBounds;
                 var character: i32 = 0;
-                for (string[read..][0..4]) |c| {
+                for (0..4) |i| {
                     // C shifts a negative int here; two's complement as
                     // every compiler does it.
-                    character = (character << 4) +% unhex(c);
+                    character = (character << 4) +% unhex(string.ptr[read + i]);
                 }
                 read += 4;
                 const bits: u32 = @bitCast(character);
@@ -215,10 +220,20 @@ pub fn decodeString(string: [:0]u8) Error!usize {
             else => {},
         }
         last = read;
-        read += std.mem.indexOfScalar(u8, string[read..], '\\') orelse len - read;
+        read = try spanToEscape(string, read);
     }
     string[write] = 0;
-    return write;
+    return string[0..write :0];
+}
+
+/// C's `strcspn(string + from, "\\")` as an index: the first backslash or
+/// NUL from `from` on. `from` may be the NUL at `string.len`, not past it.
+fn spanToEscape(string: [:0]const u8, from: usize) Error!usize {
+    if (from > string.len) return error.OutOfBounds;
+    for (string.ptr[from .. string.len + 1], from..) |c, i| {
+        if (c == '\\' or c == 0) return i;
+    }
+    unreachable;
 }
 
 /// cgltf's `cgltf_decode_uri`: decodes `%XX` escapes of `uri` in place,
@@ -248,7 +263,8 @@ pub fn decodeUri(uri: [:0]u8) usize {
 }
 
 /// The path of `uri` beside `gltf_path`, in `memory`: everything up to
-/// its last `/` or `\`, then the URI with its `%XX` escapes decoded.
+/// its last `/` or `\`, then the URI with its `%XX` escapes decoded, up
+/// to the first NUL they give.
 /// `memory` is `pathSize` bytes.
 fn combinePaths(memory: []u8, gltf_path: []const u8, uri: []const u8) []const u8 {
     const slash = std.mem.lastIndexOfAny(u8, gltf_path, "/\\");
@@ -257,7 +273,9 @@ fn combinePaths(memory: []u8, gltf_path: []const u8, uri: []const u8) []const u8
     @memcpy(memory[prefix..][0..uri.len], uri);
     memory[prefix + uri.len] = 0;
     const decoded = decodeUri(memory[prefix .. prefix + uri.len :0]);
-    return memory[0 .. prefix + decoded];
+    // A `%00` ends the path, as the NUL ends cgltf's C string.
+    const path = memory[0 .. prefix + decoded];
+    return path[0 .. std.mem.indexOfScalar(u8, path, 0) orelse path.len];
 }
 
 fn pathSize(gltf_path: []const u8, uri: []const u8) usize {
@@ -347,8 +365,7 @@ test "base64 over whole chunks decodes, and refuses a bad character only where i
 
 test "decodeString decodes escapes and refuses a cut one" {
     var text = "a\\n\\u00e9\\\"b".*;
-    const n = try decodeString(&text);
-    try testing.expectEqualStrings("a\n\xc3\xa9\"b", text[0..n]);
+    try testing.expectEqualStrings("a\n\xc3\xa9\"b", try decodeString(&text));
     var cut = "ab\\".*;
     try testing.expectError(error.OutOfBounds, decodeString(&cut));
     var short = "\\u12".*;

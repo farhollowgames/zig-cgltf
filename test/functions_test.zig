@@ -97,9 +97,10 @@ fn expectSameDecodeString(text: []const u8) !void {
     original[text.len] = 0;
     @memcpy(port[0..text.len], text);
     port[text.len] = 0;
-    const n = cgltf.decodeString(port[0..text.len :0]) catch return;
+    const n = (cgltf.decodeString(port[0..text.len :0]) catch return).len;
     const expected = c.cgltf_decode_string(&original);
-    if (n != expected or !std.mem.eql(u8, original[0 .. n + 1], port[0 .. n + 1])) {
+    // Both decode in place: every byte of the buffer must match.
+    if (n != expected or !std.mem.eql(u8, original[0 .. text.len + 1], port[0 .. text.len + 1])) {
         std.debug.print("decode_string(\"{s}\")\n", .{text});
         return error.Mismatch;
     }
@@ -114,7 +115,7 @@ fn expectSameDecodeUri(text: []const u8) !void {
     port[text.len] = 0;
     const n = cgltf.decodeUri(port[0..text.len :0]);
     const expected = c.cgltf_decode_uri(&original);
-    if (n != expected or !std.mem.eql(u8, original[0 .. n + 1], port[0 .. n + 1])) {
+    if (n != expected or !std.mem.eql(u8, original[0 .. text.len + 1], port[0 .. text.len + 1])) {
         std.debug.print("decode_uri(\"{s}\")\n", .{text});
         return error.Mismatch;
     }
@@ -126,7 +127,8 @@ test "decoding: escapes and percent signs decode as the original decodes them" {
         "\\u07FF",  "\\u0800",   "\\uFFFF",    "\\uD83D\\uDE00", "\\u0000x",   "\\uzzzz",
         "\\u12zz",  "\\uz123",   "\\q",        "a\\",         "\\u12",       "\\u",
         "%20",      "%2",        "%",          "%zz",         "%4a%4A",      "%%41",
-        "a%00b",    "%G0",       "%0G",
+        "a%00b",    "%G0",       "%0G",       "a\x00\\n",   "\\n\x00\\t",   "\\\x00\\n",
+        "\\u1\x00\\n", "%2\x00",
     };
     for (texts) |text| {
         try expectSameDecodeString(text);
@@ -134,8 +136,22 @@ test "decoding: escapes and percent signs decode as the original decodes them" {
     }
 }
 
+test "decoding: a parsed name decoded in place reads as the original's" {
+    const json = "{\"asset\":{\"version\":\"2.0\"},\"nodes\":[{\"name\":\"a\\nb\\u00e9\"}]}";
+    var options = std.mem.zeroes(c.cgltf_options);
+    var original: [*c]c.cgltf_data = null;
+    try testing.expect(c.cgltf_parse(&options, json.ptr, json.len, &original) == c.cgltf_result_success);
+    defer c.cgltf_free(original);
+    var gltf = try cgltf.parse(testing.allocator, json, .{});
+    defer gltf.deinit();
+    const expected_len = c.cgltf_decode_string(original.*.nodes[0].name);
+    const decoded = try cgltf.decodeString(gltf.nodes[0].name.?);
+    try testing.expectEqual(expected_len, decoded.len);
+    try testing.expectEqualStrings(std.mem.span(original.*.nodes[0].name), decoded);
+}
+
 test "decoding: fuzz: random escapes decode as the original decodes them" {
-    const alphabet = "\\\\\\u%0123456789abcdefABCDEFxyzbfnrt\"/ ";
+    const alphabet = "\\\\\\u%0123456789abcdefABCDEFxyzbfnrt\"/ \x00";
     try fuzz.run("decode", 20000, struct {
         fn case(random: std.Random) !void {
             var buffer: [60]u8 = undefined;
@@ -169,11 +185,18 @@ test "base64: fuzz: random texts decode as the original decodes them" {
     const alphabet = "ABCXYZabcxyz0189+/=-_ \n";
     try fuzz.run("base64", 20000, struct {
         fn case(random: std.Random) !void {
-            var buffer: [48:0]u8 = undefined;
+            // Long texts reach the decoder's 64-character chunks; most are
+            // valid base64 with a bad character here and there.
+            var buffer: [400:0]u8 = undefined;
             const len = random.uintLessThan(usize, buffer.len);
-            for (buffer[0..len]) |*b| b.* = alphabet[random.uintLessThan(usize, alphabet.len)];
+            const valid = std.base64.standard_alphabet_chars;
+            const bad_rate = random.uintLessThan(usize, 4) * 100 + 2;
+            for (buffer[0..len]) |*b| b.* = if (random.uintLessThan(usize, bad_rate) == 0)
+                alphabet[random.uintLessThan(usize, alphabet.len)]
+            else
+                valid[random.uintLessThan(usize, valid.len)];
             buffer[len] = 0;
-            try expectSameBase64(random.uintLessThan(usize, 40), buffer[0..len :0]);
+            try expectSameBase64(random.uintLessThan(usize, len * 3 / 4 + 8), buffer[0..len :0]);
         }
     }.case);
 }

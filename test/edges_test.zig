@@ -516,6 +516,8 @@ test "edges: files beside the glTF load as the original's" {
     const cases = [_][]const u8{
         "{\"asset\":{\"version\":\"2.0\"},\"buffers\":[{\"byteLength\":648,\"uri\":\"Box0.bin\"}]}",
         "{\"asset\":{\"version\":\"2.0\"},\"buffers\":[{\"byteLength\":648,\"uri\":\"Box%30.bin\"}]}",
+        // A `%00` ends the file name.
+        "{\"asset\":{\"version\":\"2.0\"},\"buffers\":[{\"byteLength\":648,\"uri\":\"Box0.bin%00x\"}]}",
         "{\"asset\":{\"version\":\"2.0\"},\"buffers\":[{\"byteLength\":0,\"uri\":\"Box0.bin\"}]}",
         "{\"asset\":{\"version\":\"2.0\"},\"buffers\":[{\"byteLength\":10,\"uri\":\"Box0.bin\"}]}",
         "{\"asset\":{\"version\":\"2.0\"},\"buffers\":[{\"byteLength\":649,\"uri\":\"Box0.bin\"}]}",
