@@ -20,16 +20,14 @@ Written to resume from: the next agent reads this section and `git log`.
   byte for byte. The Khronos sample models are a lazy dependency at
   `8f49239`.
 - Step 2 (inventory): this file.
-- Step 3 (port): in progress. Written: `src/number.zig` (glibc's atoi,
-  atoll, atof), `src/jsmn.zig`, `src/types.zig`, `src/parse.zig`.
-  Not yet written: `src/cgltf.zig` (root: `Gltf`, `parse`, GLB, options),
-  `src/load.zig`, `src/validate.zig`, the accessor and transform helpers,
-  `build.zig`, the oracle tests.
+- Step 3 (port): every function is written and the unit tests pass
+  (`zig test src/cgltf.zig`). `build.zig` builds the original from
+  `reference/shim/cgltf.c` and translates `cgltf.h` for the differential
+  tests. Not yet written: `test/differential.zig` and the tests under it,
+  `bench/bench.zig`.
 - Steps 4 to 7: not started.
 
-Next steps, in order: root module and GLB; load_buffers and base64;
-validate; accessor helpers and transforms; build.zig with the reference C
-library and translate-c; differential tests over every sample model;
+Next steps, in order: differential tests over every sample model;
 edge cases; fuzzing; benchmark; docs; step-4 report; then the performance
 pass, the skeptic and the fixes on branch `review/perf-and-skeptic`.
 
@@ -38,12 +36,12 @@ pass, the skeptic and the fixes on branch `review/perf-and-skeptic`.
 | upstream | zig-cgltf | tests | state |
 | --- | --- | --- | --- |
 | `cgltf_parse` (glTF and GLB from memory) | `parse` | | ported |
-| `cgltf_parse_file` | `parseFile` | | not started |
+| `cgltf_parse_file` | `parseFile` | | ported |
 | `cgltf_options.json_token_count` | `Options.json_token_count` | | ported |
 | `cgltf_options.memory` (alloc and free callbacks) | an `std.mem.Allocator` | | ported |
-| `cgltf_options.file` (read and release callbacks) | `Options.file_reader` | | not started |
-| `cgltf_options.type` (auto, gltf, glb) | `Options.file_type` | | not started |
-| `cgltf_free` | `Gltf.deinit` | | not started |
+| `cgltf_options.file` (read and release callbacks) | `Options.file_reader` | | ported |
+| `cgltf_options.type` (auto, gltf, glb) | `Options.file_type` | | ported |
+| `cgltf_free` | `Gltf.deinit` | | ported |
 | jsmn (strict, parent links) | `jsmn.zig` | | ported |
 | C's `atoi`, `atoll`, `atof` as cgltf reads numbers | `number.zig` | | ported |
 | glTF 1.0 detection (`cgltf_result_legacy_gltf`) | `error.LegacyGltf` | | ported |
@@ -56,28 +54,28 @@ pass, the skeptic and the fixes on branch `review/perf-and-skeptic`.
 
 | upstream | zig-cgltf | tests | state |
 | --- | --- | --- | --- |
-| `cgltf_load_buffers` (files, data URIs, GLB chunk) | `loadBuffers` | | not started |
-| `cgltf_load_buffer_base64` | `loadBufferBase64` | | not started |
-| `cgltf_decode_string` | `decodeString` | | not started |
-| `cgltf_decode_uri` | `decodeUri` | | not started |
-| `cgltf_validate` | `validate` | | not started |
-| `cgltf_copy_extras_json` (deprecated) | `copyExtrasJson` | | not started |
+| `cgltf_load_buffers` (files, data URIs, GLB chunk) | `loadBuffers` | | ported |
+| `cgltf_load_buffer_base64` | `loadBufferBase64` | | ported |
+| `cgltf_decode_string` | `decodeString` | | ported |
+| `cgltf_decode_uri` | `decodeUri` | | ported |
+| `cgltf_validate` | `validate` | | ported |
+| `cgltf_copy_extras_json` (deprecated) | `copyExtrasJson` | | ported |
 
 ## Accessors, views and nodes
 
 | upstream | zig-cgltf | tests | state |
 | --- | --- | --- | --- |
-| `cgltf_accessor_read_float` | `readFloat` | | not started |
-| `cgltf_accessor_read_uint` | `readUint` | | not started |
-| `cgltf_accessor_read_index` | `readIndex` | | not started |
-| `cgltf_accessor_unpack_floats` | `unpackFloats` | | not started |
-| `cgltf_accessor_unpack_indices` | `unpackIndices` | | not started |
-| sparse accessors (in the five above) | as upstream | | not started |
-| `cgltf_buffer_view_data` | `bufferViewData` | | not started |
-| `cgltf_find_accessor` | `findAccessor` | | not started |
-| `cgltf_num_components`, `cgltf_component_size`, `cgltf_calc_size` | `numComponents`, `componentSize`, `calcSize` | | not started |
-| `cgltf_node_transform_local`, `cgltf_node_transform_world` | `transformLocal`, `transformWorld` | | not started |
-| `cgltf_mesh_index` and the other 15 `_index` functions | references are already indices | | not started |
+| `cgltf_accessor_read_float` | `readFloat` | | ported |
+| `cgltf_accessor_read_uint` | `readUint` | | ported |
+| `cgltf_accessor_read_index` | `readIndex` | | ported |
+| `cgltf_accessor_unpack_floats` | `unpackFloats` | | ported |
+| `cgltf_accessor_unpack_indices` | `unpackIndices` | | ported |
+| sparse accessors (in the five above) | as upstream | | ported |
+| `cgltf_buffer_view_data` | `bufferViewData` | | ported |
+| `cgltf_find_accessor` | `findAccessor` | | ported |
+| `cgltf_num_components`, `cgltf_component_size`, `cgltf_calc_size` | `numComponents`, `componentSize`, `calcSize` | | ported |
+| `cgltf_node_transform_local`, `cgltf_node_transform_world` | `transformLocal`, `transformWorld` | | ported |
+| `cgltf_mesh_index` and the other 15 `_index` functions | references are already indices | | ported |
 
 ## Extensions
 

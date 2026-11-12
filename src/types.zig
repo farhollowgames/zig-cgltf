@@ -241,7 +241,7 @@ pub const Accessor = struct {
 };
 
 pub const Attribute = struct {
-    name: [:0]u8 = &.{},
+    name: [:0]u8,
     type: AttributeType = .invalid,
     /// The set number after the underscore, as `TEXCOORD_1`.
     index: i32 = 0,

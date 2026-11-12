@@ -162,7 +162,7 @@ const Parser = struct {
     fn string(p: Parser, i: usize, out: *?[:0]u8) Fail!usize {
         try p.checkType(i, .string);
         if (out.* != null) return error.Json;
-        out.* = try p.gpa.dupeZ(u8, p.text(i));
+        out.* = try p.gpa.dupeSentinel(u8, p.text(i), 0);
         return i + 1;
     }
 
@@ -203,7 +203,7 @@ const Parser = struct {
         seen.* = true;
         const count: usize = @intCast(p.tokens[start].size);
         out.* = try p.gpa.alloc(types.Attribute, count);
-        for (out.*) |*attribute| attribute.* = .{};
+        for (out.*) |*attribute| attribute.* = .{ .name = undefined };
         var i = start + 1;
         for (out.*) |*attribute| {
             try p.checkKey(i);
@@ -223,16 +223,16 @@ const Parser = struct {
         const token = p.tokens[i];
         out.start_offset = @bitCast(token.start);
         out.end_offset = @bitCast(token.end);
-        out.data = try p.gpa.dupeZ(u8, p.text(i));
+        out.data = try p.gpa.dupeSentinel(u8, p.text(i), 0);
         return p.skip(i);
     }
 
     fn unprocessedExtension(p: Parser, start: usize, out: *types.Extension) Fail!usize {
         try p.checkType(start, .string);
         try p.checkType(start + 1, .object);
-        out.name = try p.gpa.dupeZ(u8, p.text(start));
+        out.name = try p.gpa.dupeSentinel(u8, p.text(start), 0);
         const i = start + 1;
-        out.data = try p.gpa.dupeZ(u8, p.text(i));
+        out.data = try p.gpa.dupeSentinel(u8, p.text(i), 0);
         return p.skip(i);
     }
 
@@ -327,7 +327,7 @@ const Parser = struct {
             try p.checkType(i, .object);
             const obj_size = p.tokens[i].size;
             i += 1;
-            var material: i32 = -1;
+            var material_index: i32 = -1;
             var variants_tok: ?usize = null;
             var extras_tok: ?usize = null;
             var k: i32 = 0;
@@ -335,7 +335,7 @@ const Parser = struct {
                 try p.checkKey(i);
                 if (p.is(i, "material")) {
                     i += 1;
-                    material = p.toInt(i);
+                    material_index = p.toInt(i);
                     i += 1;
                 } else if (p.is(i, "variants")) {
                     variants_tok = i + 1;
@@ -349,7 +349,7 @@ const Parser = struct {
                 }
             }
             const variants = variants_tok orelse return error.Json;
-            if (material < 0) return error.Json;
+            if (material_index < 0) return error.Json;
             const variant_count: usize = @intCast(p.tokens[variants].size);
             if (out) |mappings| {
                 for (0..variant_count) |v| {
@@ -361,7 +361,7 @@ const Parser = struct {
                         else => error.Json,
                     };
                     const mapping = &mappings[offset.*];
-                    mapping.material = @intCast(material);
+                    mapping.material = @intCast(material_index);
                     mapping.variant = @intCast(variant);
                     if (extras_tok) |e| _ = try p.extras(e, &mapping.extras);
                     offset.* += 1;
