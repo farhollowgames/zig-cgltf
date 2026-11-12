@@ -51,8 +51,9 @@ pub fn build(b: *std.Build) void {
     const test_options = b.addOptions();
     test_options.addOption(u64, "fuzz_seed", fuzz_seed);
     test_options.addOption(?u64, "fuzz_replay", fuzz_replay);
-    test_options.addOptionPath("models", samples.path("Models"));
-    test_options.addOptionPath("reference", b.path("reference/cgltf"));
+    // A file in each directory, since an option path must be a file.
+    test_options.addOptionPath("model_index", samples.path("Models/model-index.json"));
+    test_options.addOptionPath("reference_header", b.path("reference/cgltf/cgltf.h"));
     const test_options_mod = test_options.createModule();
 
     const differential = b.addTest(.{
