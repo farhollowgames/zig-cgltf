@@ -63,6 +63,11 @@ Written to resume from: the next agent reads this section and `git log`.
     accessor's elements chooses them outside the loop: read float 264.3 to 172.2 ms (ratio
     0.81 to 1.15), unpack floats 128.4 to 57.9 ms (0.76 to 1.52). Without `inline` the
     specialization alone gained nothing on read float (250 to 278 ms over two runs).
+  - unpack floats: one check that every element lies in the buffer's memory (`elementsFit`),
+    then a loop with no checks of its own; packed components (stride equal to the element's
+    size, no matrix padding) convert 16 at a time as vectors. When the check fails, the
+    checked loop runs as before and refuses where it did. 57.9 to 15.6 ms (ratio 1.52 to
+    5.96).
 - Steps 6 and 7 (skeptic, fixes): not started.
 
 Next steps, in order: on `review/perf-and-skeptic`, a fresh agent's performance pass (each

@@ -272,6 +272,77 @@ pub fn readIndex(gltf: *const Gltf, accessor: *const Accessor, index: usize) Rea
     return componentReadIndex(bytes, accessor.component_type);
 }
 
+/// Whether the first `count` elements of `accessor` lie in `memory_len`
+/// bytes from its offset on, with no offset wrapping, so that reading
+/// them needs no check of its own.
+fn elementsFit(memory_len: usize, accessor: *const Accessor, count: usize) bool {
+    const span = elementSpan(accessor.type, accessor.component_type);
+    const last = std.math.mul(usize, accessor.stride, count -| 1) catch return false;
+    const start = std.math.add(usize, accessor.offset, last) catch return false;
+    return start <= memory_len and span <= memory_len - start;
+}
+
+/// `out.len` components from `bytes`, packed with no stride or padding.
+fn convertRun(
+    comptime component_type: ComponentType,
+    comptime normalized: bool,
+    bytes: []const u8,
+    out: []f32,
+) void {
+    const T = Stored(component_type);
+    const lanes = 16;
+    var i: usize = 0;
+    while (i + lanes <= out.len) : (i += lanes) {
+        const stored: *align(1) const @Vector(lanes, T) = @ptrCast(bytes[i * @sizeOf(T) ..]);
+        out[i..][0..lanes].* = toFloats(component_type, normalized, lanes, stored.*);
+    }
+    while (i < out.len) : (i += 1) {
+        const stored: @Vector(1, T) = .{readInt(T, bytes[i * @sizeOf(T) ..])};
+        out[i] = toFloats(component_type, normalized, 1, stored)[0];
+    }
+}
+
+/// The elements of `accessor` that fill `out`, from `memory`, where
+/// `elementsFit` has checked they lie.
+fn unpackElementFloats(accessor: *const Accessor, memory: []const u8, out: []f32) void {
+    switch (accessor.component_type) {
+        inline else => |component_type| if (accessor.normalized) {
+            unpackElementsAs(component_type, true, accessor, memory, out);
+        } else {
+            unpackElementsAs(component_type, false, accessor, memory, out);
+        },
+    }
+}
+
+fn unpackElementsAs(
+    comptime component_type: ComponentType,
+    comptime normalized: bool,
+    accessor: *const Accessor,
+    memory: []const u8,
+    out: []f32,
+) void {
+    const component_size = @sizeOf(Stored(component_type));
+    const packed_stride = cgltf.numComponents(accessor.type) * component_size;
+    if (component_type != .invalid and accessor.stride == packed_stride and
+        componentOffsets(accessor.type, component_size).len == 0)
+    {
+        const bytes = memory[accessor.offset..][0 .. out.len * component_size];
+        convertRun(component_type, normalized, bytes, out);
+        return;
+    }
+    switch (accessor.type) {
+        inline else => |t| {
+            const n = comptime cgltf.numComponents(t);
+            var offset = accessor.offset;
+            var at: usize = 0;
+            while (at < out.len) : (at += n) {
+                readElementFloats(component_type, normalized, t, memory[offset..], out[at..][0..n]);
+                offset +%= accessor.stride;
+            }
+        },
+    }
+}
+
 /// The floats `unpackFloats` can write: every component of every element.
 pub fn unpackFloatsCount(accessor: *const Accessor) usize {
     return accessor.count *% cgltf.numComponents(accessor.type);
@@ -293,6 +364,8 @@ pub fn unpackFloats(gltf: *const Gltf, accessor: *const Accessor, out: []f32) Re
         if (accessor.component_type == .r_32f and accessor.stride == floats_per_element * 4) {
             const bytes = try bytesAt(memory, accessor.offset, used.len * 4);
             @memcpy(std.mem.sliceAsBytes(used), bytes);
+        } else if (used.len > 0 and elementsFit(memory.len, accessor, element_count)) {
+            unpackElementFloats(accessor, memory, used);
         } else {
             var offset = accessor.offset;
             var at: usize = 0;
