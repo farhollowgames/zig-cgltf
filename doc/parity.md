@@ -23,6 +23,7 @@ on those calls. Each case has a test in `test/refusals_test.zig`.
 | `parse` with a token count whose array size overflows `size_t` | allocates a wrapped size and writes past it | `error.OutOfMemory` | `refusal: a token count whose array size overflows is out of memory` |
 | `parse` of JSON with more than 2^31 - 1 tokens: cgltf keeps the count in an `int` | overflows the `int` | `error.InvalidJson` | none: the input needs a file of more than 4 GiB |
 | `write` of extras without `data` whose offsets a caller moved past the JSON | reads past the JSON | `error.OutOfBounds` | `refusal: writing extras whose offsets lie outside the JSON` |
+| `write` and `writeFile` of extras without `data` whose JSON range holds a NUL, as JSON a caller changed after parsing may (jsmn stops at a NUL): cgltf's `%.*s` stops at the NUL while its size counts the whole range, so its cursor moves past bytes it never wrote, and the extras' JSON can be left unclosed | writes text that disagrees with its size | `error.InvalidExtras`, from `writeFile` before the file is created | `refusal: writing extras whose JSON holds a NUL` |
 | `write` into an output too small for the text: cgltf's cursor moves past the end, and its next `snprintf` writes there | writes past the output | `error.WriteFailed`, as from any full `std.Io.Writer` | `refusal: writing into an output too small for the text` |
 
 `bufferViewData` of a view whose offset lies past its buffer's memory is also
@@ -96,12 +97,9 @@ buffer, reads the same bytes as cgltf.
   type, where cgltf reads it from its options, and writes the JSON twice, once to count it
   and once to the file, so it allocates nothing.
 - **Write errors.** `writeFile` returns `error.IoError` when writing or flushing the file
-  fails; cgltf ignores the results of `fwrite` and `fclose` and returns success.
-- **Extras with a NUL.** Extras without `data` are written from the JSON at their offsets,
-  up to the first NUL, as cgltf's `%.*s` writes them. cgltf counts the whole range in its
-  size and moves its cursor past it, leaving the bytes after the NUL unwritten; the port
-  counts what it writes. jsmn stops at a NUL, so this needs JSON text a caller changed after
-  parsing.
+  fails, a deliberate difference: cgltf returns success there only because it ignores the
+  results of `fwrite` and `fclose`, so a full disk or a failed device gives a short file
+  that cgltf reports as written. The port reports the failure.
 - **Empty arrays.** A node's `children`, a skin's `joints` and a scene's `nodes` are `null`
   when the file has none and empty when it has `[]`, because cgltf writes back the empty
   arrays it read.

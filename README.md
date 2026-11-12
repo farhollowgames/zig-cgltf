@@ -104,7 +104,10 @@ The reasons are in [`doc/parity.md`](doc/parity.md).
   buffer is the count of an `std.Io.Writer.Discarding`. An output too small for the text is
   `error.WriteFailed`, where cgltf writes past it.
 - `writeFile` takes the file type, where cgltf reads it from its options, and returns
-  `error.IoError` when writing the file fails, where cgltf returns success.
+  `error.IoError` when writing the file fails, where cgltf ignores the failure and returns
+  success.
+- `error.InvalidExtras` from `write` and `writeFile` for extras whose JSON holds a NUL, which
+  cgltf cuts at the NUL while counting the whole range.
 - A node's `children`, a skin's `joints` and a scene's `nodes` are optional: `null` when the
   file has none, and empty for `[]`, which cgltf writes back.
 - `error.InvalidOptions` is never returned: cgltf returns it for a null options pointer, which
@@ -117,8 +120,8 @@ Nothing: every function of `cgltf.h` and `cgltf_write.h` is ported, and
 
 ## Testing and benchmarks
 
-`zig build test` runs 65 tests: 16 unit tests and 49 tests that build cgltf from `reference/`.
-Most of the 49 run cgltf and the port on the same inputs (every Khronos sample model,
+`zig build test` runs 66 tests: 16 unit tests and 50 tests that build cgltf from `reference/`.
+Most of the 50 run cgltf and the port on the same inputs (every Khronos sample model,
 hand-made edge cases and 13,000 fuzzed files) and compare every field of the result, every
 string byte, every reference as an index, every float as bits, and every byte of the text
 and files written.

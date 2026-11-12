@@ -168,6 +168,30 @@ test "refusal: writing extras whose offsets lie outside the JSON" {
     try testing.expectError(error.OutOfBounds, cgltf.write(&gltf, &out.writer));
 }
 
+test "refusal: writing extras whose JSON holds a NUL" {
+    // cgltf's `%.*s` stops at the NUL while its size counts the whole range,
+    // and the text cut there can leave the extras' JSON unclosed. jsmn stops
+    // at a NUL, so only JSON a caller changed after parsing holds one.
+    var json = "{\"asset\":{\"version\":\"2.0\"},\"extras\":{\"a\":\"bcd\"}}".*;
+    var gltf = try cgltf.parse(testing.allocator, &json, .{});
+    defer gltf.deinit();
+    gltf.extras.data = null;
+    var out: std.Io.Writer.Discarding = .init(&.{});
+    try cgltf.write(&gltf, &out.writer);
+    json[gltf.extras.start_offset + 7] = 0;
+    try testing.expectError(error.InvalidExtras, cgltf.write(&gltf, &out.writer));
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const gpa = testing.allocator;
+    const path = try std.fs.path.join(gpa, &.{ ".zig-cache", "tmp", &tmp.sub_path, "a.glb" });
+    defer gpa.free(path);
+    try testing.expectError(error.InvalidExtras, cgltf.writeFile(&gltf, testing.io, path, .glb));
+    // A NUL just past the range is not part of the extras.
+    json[gltf.extras.start_offset + 7] = 'c';
+    json[gltf.extras.end_offset] = 0;
+    try cgltf.write(&gltf, &out.writer);
+}
+
 test "refusal: writing into an output too small for the text" {
     // cgltf's snprintf calls move past a short buffer's end, and the next
     // call writes past it.

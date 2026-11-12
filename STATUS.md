@@ -6,11 +6,11 @@ Done: `cgltf_write.h` ported on branch `port/writer` (from `review/perf-and-skep
 through the port steps: inventory, oracle tests, benchmark, performance pass, skeptic and
 fixes. Release (step 8) waits for the author.
 
-Tests: `zig build test` runs 65, all passing in ReleaseSafe: 16 unit tests, 35 oracle tests
-and 14 tests of refusals, failed allocations and a custom reader. New for the writer: every
+Tests: `zig build test` runs 66, all passing in ReleaseSafe: 16 unit tests, 35 oracle tests
+and 15 tests of refusals, failed allocations and a custom reader. New for the writer: every
 sample model's text, glTF file and GLB file compared byte for byte with cgltf's, the text
 parsed again by both, 3,000 generated documents written and compared, extras on every
-object, a padded BIN chunk, the bytes past the text in a fixed output, two refusals, and
+object, a padded BIN chunk, the bytes past the text in a fixed output, three refusals, and
 `formatFloat` against glibc's `%.9g` (220,000 random floats; a probe outside the tests
 compared every positive finite float).
 
@@ -21,13 +21,16 @@ indent copies, property names as constants and integers without `print`.
 Skeptic findings: the indent's fixed-size copy wrote spaces past the text into the caller's
 buffer (fixed, with a test that failed before); the BIN padding and the extras of 16 kinds
 of object were untested (tests added, each failing under a mutation the suite let through);
-`writeFile`'s `IoError` where cgltf returns success, extras whose JSON range holds a NUL
-(cgltf counts the whole range), the C locale and the GLB total on 64-bit big-endian machines
-were undocumented (now in `doc/parity.md`).
+`writeFile`'s `IoError` where cgltf returns success, the C locale and the GLB total on 64-bit
+big-endian machines were undocumented (now in `doc/parity.md`). Extras whose JSON range holds
+a NUL, which cgltf cuts at the NUL while counting the whole range, were cut by the port too.
 
-Open: the step-4 and step-7 points below; for the writer, whether `writeFile` should return
-success on a failed write as cgltf does (it returns `IoError`), and whether extras with a NUL
-should be refused rather than cut. The build prints a "failed command" line for the
+The author's answers: `writeFile` keeps returning `IoError` on a failed write, documented as a
+deliberate difference; extras whose JSON holds a NUL are refused with `error.InvalidExtras`
+(test `refusal: writing extras whose JSON holds a NUL`, failing first), and `writeFile` now
+counts the JSON before it creates the file, so a refused write leaves the path untouched.
+
+Open: the step-4 and step-7 points below. The build prints a "failed command" line for the
 differential tests on every run that is not cached, because the fuzz tests print their
 counts to stderr; every step succeeds.
 
@@ -180,7 +183,7 @@ The tests the tables name, by short name:
 | write-extras | `write: extras on every object write as the original writes them` |
 | write-output | `write: the output's bytes past the text are left as the original leaves them` |
 | write-fuzz | `fuzz: random glTF documents write as the original writes them, and parse again` |
-| write-refusals | the two `refusal: writing` tests |
+| write-refusals | the three `refusal: writing` tests |
 | write-unit | the unit tests in `src/write.zig` |
 | floats | the two `numbers:` tests of `%.9g`, and `formatFloat prints nine significant digits as glibc's %.9g` |
 
@@ -266,7 +269,7 @@ From `cgltf_write.h`, on branch `port/writer`.
 | --- | --- | --- | --- |
 | `cgltf_write` into a buffer | `write` to an `std.Io.Writer` | write-samples, write-again, write-fuzz, write-output, write-unit | benchmarked |
 | `cgltf_write` with no buffer (the size) | `write` to an `std.Io.Writer.Discarding` | write-samples, write-refusals | oracle-tested |
-| `cgltf_write_file`, glTF and GLB | `writeFile` | write-files, write-glb | oracle-tested |
+| `cgltf_write_file`, glTF and GLB | `writeFile` | write-files, write-glb, write-refusals | oracle-tested |
 | every object, extension and extras the writer writes | as upstream | write-samples, write-fuzz, write-extras | oracle-tested |
 | `%.9g` through `snprintf` | `number.formatFloat` | floats | oracle-tested |
 

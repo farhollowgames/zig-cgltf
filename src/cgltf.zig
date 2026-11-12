@@ -103,6 +103,7 @@ pub const findAccessor = accessor.findAccessor;
 pub const transformLocal = transform.transformLocal;
 pub const transformWorld = transform.transformWorld;
 pub const WriteError = write_json.WriteError;
+pub const WriteFileError = write_json.WriteFileError;
 pub const write = write_json.write;
 pub const writeFile = write_json.writeFile;
 

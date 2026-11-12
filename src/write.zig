@@ -12,9 +12,14 @@ const types = @import("types.zig");
 const Gltf = cgltf.Gltf;
 const invalid_index = types.invalid_index;
 
-/// A failed write, or extras whose offsets lie outside the JSON text,
-/// which cgltf would read past.
-pub const WriteError = Io.Writer.Error || error{OutOfBounds};
+/// A failed write; extras whose offsets lie outside the JSON text, which
+/// cgltf would read past; or extras whose JSON holds a NUL, which cgltf
+/// cuts there while counting the whole range.
+pub const WriteError = Io.Writer.Error || error{ OutOfBounds, InvalidExtras };
+
+/// `writeFile`'s errors: a file that cannot be created, a failed write, and
+/// the extras `write` refuses.
+pub const WriteFileError = error{ FileNotFound, IoError, OutOfBounds, InvalidExtras };
 
 /// cgltf's `cgltf_write`: the glTF JSON text of `gltf` to `out`, without
 /// the NUL cgltf adds. cgltf's size query, with no buffer, is the byte
@@ -125,34 +130,46 @@ pub fn write(gltf: *const Gltf, out: *Io.Writer) WriteError!void {
 
 /// cgltf's `cgltf_write_file`: writes `gltf` to the file at `path`, as
 /// glTF JSON or, for `.glb`, as a GLB with the JSON and `gltf.bin` as its
-/// chunks. The JSON is written twice, once to count its bytes for the GLB
-/// header and once to the file, as cgltf writes it. A file that cannot be
-/// created is `error.FileNotFound`, and a failed write `error.IoError`,
-/// where cgltf ignores write failures.
+/// chunks. The JSON is written twice, as cgltf writes it: once to count its
+/// bytes, so that extras `write` refuses are refused before the file is
+/// created, and once to the file. A file that cannot be created is
+/// `error.FileNotFound`, and a failed write `error.IoError`, where cgltf
+/// ignores write failures.
 pub fn writeFile(
     gltf: *const Gltf,
     io: Io,
     path: []const u8,
     file_type: types.FileType,
-) cgltf.Error!void {
+) WriteFileError!void {
+    var counter: Io.Writer.Discarding = .init(&.{});
+    write(gltf, &counter.writer) catch |err| return switch (err) {
+        error.OutOfBounds => error.OutOfBounds,
+        error.InvalidExtras => error.InvalidExtras,
+        // A `Discarding` writer takes every byte.
+        error.WriteFailed => unreachable,
+    };
+    const json_size: usize = @intCast(counter.fullCount());
     const file = Io.Dir.cwd().createFile(io, path, .{}) catch return error.FileNotFound;
     defer file.close(io);
     var buffer: [4096]u8 = undefined;
     var file_writer = file.writer(io, &buffer);
     const out = &file_writer.interface;
-    writeFileTo(gltf, out, file_type) catch |err| return switch (err) {
+    writeFileTo(gltf, out, file_type, json_size) catch |err| return switch (err) {
         error.OutOfBounds => error.OutOfBounds,
+        error.InvalidExtras => error.InvalidExtras,
         error.WriteFailed => error.IoError,
     };
     out.flush() catch return error.IoError;
 }
 
-fn writeFileTo(gltf: *const Gltf, out: *Io.Writer, file_type: types.FileType) WriteError!void {
+fn writeFileTo(
+    gltf: *const Gltf,
+    out: *Io.Writer,
+    file_type: types.FileType,
+    json_size: usize,
+) WriteError!void {
     if (file_type != .glb) return write(gltf, out);
 
-    var counter: Io.Writer.Discarding = .init(&.{});
-    try write(gltf, &counter.writer);
-    const json_size: usize = @intCast(counter.fullCount());
     const bin = gltf.bin orelse &.{};
     const json_pad = (4 - json_size % 4) % 4;
     const bin_pad = (4 - bin.len % 4) % 4;
@@ -474,8 +491,10 @@ const Context = struct {
         if (extras.end_offset < extras.start_offset or extras.end_offset > json.len) {
             return error.OutOfBounds;
         }
+        const text = json[extras.start_offset..extras.end_offset];
+        if (std.mem.indexOfScalar(u8, text, 0) != null) return error.InvalidExtras;
         try c.label("extras");
-        try c.out.writeAll(cString(json[extras.start_offset..extras.end_offset]));
+        try c.out.writeAll(text);
         c.needs_comma = true;
     }
 
