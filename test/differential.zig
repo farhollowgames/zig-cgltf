@@ -7,4 +7,5 @@ comptime {
     _ = @import("edges_test.zig");
     _ = @import("functions_test.zig");
     _ = @import("documents_fuzz_test.zig");
+    _ = @import("refusals_test.zig");
 }
