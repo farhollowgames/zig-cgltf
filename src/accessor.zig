@@ -191,17 +191,24 @@ inline fn elementReadFloat(
     return true;
 }
 
-fn elementReadUint(memory: []const u8, offset: usize, accessor: *const Accessor, out: []u32) ReadError!bool {
-    const num_components = cgltf.numComponents(accessor.type);
-    if (out.len < num_components) return false;
+/// Inline, like `elementReadFloat`, choosing the component and element
+/// type once.
+inline fn elementReadUint(memory: []const u8, offset: usize, accessor: *const Accessor, out: []u32) ReadError!bool {
     switch (accessor.type) {
         .mat2, .mat3, .mat4 => return false,
-        else => {},
-    }
-    const component_size = cgltf.componentSize(accessor.component_type);
-    const bytes = try bytesAt(memory, offset, elementSpan(accessor.type, accessor.component_type));
-    for (out[0..num_components], 0..) |*value, i| {
-        value.* = componentReadUint(bytes[component_size * i ..], accessor.component_type);
+        inline else => |t| {
+            const num_components = comptime cgltf.numComponents(t);
+            if (out.len < num_components) return false;
+            switch (accessor.component_type) {
+                inline else => |component_type| {
+                    const component_size = comptime cgltf.componentSize(component_type);
+                    const bytes = try bytesAt(memory, offset, comptime elementSpan(t, component_type));
+                    inline for (out[0..num_components], 0..) |*value, i| {
+                        value.* = componentReadUint(bytes[component_size * i ..], component_type);
+                    }
+                },
+            }
+        },
     }
     return true;
 }
