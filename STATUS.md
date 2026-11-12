@@ -1,5 +1,40 @@
 # Status
 
+## Step-7 report
+
+Done: steps 5 to 7 on branch `review/perf-and-skeptic`, pushed; `main` holds steps 1 to 4.
+
+Tests: `zig build test` runs 49, all passing in ReleaseSafe: 12 unit tests, 25 oracle tests
+and 12 tests of refusals, failed allocations and a custom reader. Fuzz seeds 0, 1 and 13
+pass.
+
+Performance pass (one commit each, every one with a gain and the oracle tests unchanged):
+`@Vector` index bounds in `validate`, a 64-character base64 decoder, accessor reads specialized
+at compile time with one bounds check per call, and jsmn stepping over string bytes 64 at a
+time.
+
+Skeptic findings, each fixed with a test that failed before:
+- `decodeString` read past a NUL inside the string, where cgltf stops (wrong result).
+- A file URI with `%00` kept the bytes after it in the path; cgltf opens the file before it.
+- `decodeString`'s in-place result left callers' slices at the old length: it now returns
+  the decoded slice (interface change, in `doc/parity.md`).
+- The benchmark hashed one float of read float and world transforms, so the inlined port's
+  other work could be removed: world transforms went from 1.9 times faster to 29% slower.
+- The mutation fuzz floor of 300 failed on seed 13 (299): now 250.
+- Stale counts and tables in the docs.
+Found while fixing: the oracle skipped cgltf on every port refusal, so a wrong refusal would
+pass. Each refusal is now checked against bounds from cgltf's structs, which found the
+accessor reads refusing a view past its buffer's memory when nothing is read; fixed. A node's
+own matrix is compared by bits, and a new fuzz test puts 3,000 accessor layouts through the
+helpers.
+
+Benchmark, `--rounds 3`, cgltf's time / zig-cgltf's (above 1, the port is faster): parse glTF
+1.48, parse GLB 1.14, decode base64 66.8, validate 0.91, unpack floats 6.27, read float
+1.17, unpack indices 2.58, read index 1.00, world transforms 0.77.
+
+Still open: the step-4 points below, `cgltf_write.h` awaiting approval, world transforms not
+looked into, more than 2^31 - 1 tokens untested, `readUint` not tuned.
+
 ## Step-4 report
 
 Done: steps 1 to 4 of the port method, on `main`. cgltf 1.15 (`85cd623`) is vendored unchanged;
@@ -45,47 +80,16 @@ Every item's state:
 Written to resume from: the next agent reads this section and `git log`.
 
 - Steps 1 to 4: done, on `main`.
-- Step 5 (performance pass): done on `review/perf-and-skeptic`; the coordinator reruns the
-  final benchmark. Baseline, `--rounds 3` at load average 26 to 33 (zig-cgltf ms / cgltf
-  ms): decode base64 80.3 / 64.8, validate 34.0 / 9.1, unpack floats 128.4 / 97.7, read
-  float 264.3 / 213.6, unpack indices 14.4 / 10.8. Kept, one commit each:
-  - validate: `indexBound` takes the largest index with 64-byte vectors, four at a time, one
-    function per index size: 34.0 to 4.4 ms (ratio 0.27 to 1.05). A `@bitCast` of a byte
-    array to a vector compiled to scalar shifts and made it three times slower; loading
-    through an `*align(1) const @Vector` pointer gives `vpmaxuw` on memory.
-  - decode base64: 64 characters at a time with `@Vector` range checks and shuffles into 48
-    bytes, then cgltf's loop for the rest or from a chunk with a character outside the
-    alphabet: 80.3 to 1.2 ms (ratio 0.81 to 58). A unit test in `load.zig` covers the chunks
-    and where a bad character is refused; the oracle's base64 fuzz texts are under 48
-    characters, so only the sample models' data URIs reach the chunks there.
-  - read float: `elementReadFloat` is inline and picks the component type, the element
-    type and `normalized` once, each as a compile-time parameter, so a caller's loop over one
-    accessor's elements chooses them outside the loop: read float 264.3 to 172.2 ms (ratio
-    0.81 to 1.15), unpack floats 128.4 to 57.9 ms (0.76 to 1.52). Without `inline` the
-    specialization alone gained nothing on read float (250 to 278 ms over two runs).
-  - unpack floats: one check that every element lies in the buffer's memory (`elementsFit`),
-    then a loop with no checks of its own; packed components (stride equal to the element's
-    size, no matrix padding) convert 16 at a time as vectors. When the check fails, the
-    checked loop runs as before and refuses where it did. 57.9 to 15.6 ms (ratio 1.52 to
-    5.96).
-  - unpack indices: the same single check, then unchecked reads, with packed indices
-    widened 16 at a time as vectors: 14.4 to 4.5 ms (ratio 0.75 to 2.68).
-  - parse glTF: jsmn's string loop steps over 64 bytes at a time while they hold no quote,
-    backslash or NUL (data URIs are long strings, read twice): 93.1 to 64.8 ms (ratio 1.11
-    to 1.46); parse GLB unchanged within noise (38.6 to 39.3 ms). A unit test in
-    `jsmn.zig` puts an escape, a refused escape, a NUL and an escaped quote at every
-    position of long strings.
-  Measured and left: validate's index loop is now memory-bound `vpmaxuw`/`vpmaxud` on both
-  sides, and the row moves between 0.89 and 1.05 with load; read index (1.14), parse GLB
-  (1.1 to 1.2) and world transforms (1.9) were already ahead. Not tried: `readUint` and
-  `elementReadUint` (not benchmarked) keep the per-component switch; jsmn's whitespace runs
-  are still stepped one byte at a time.
-- Steps 6 and 7 (skeptic, fixes): not started.
+- Steps 5 to 7: done on `review/perf-and-skeptic` (reports above). The performance pass
+  measured each change with `--rounds 3` under load; its notes: a `@bitCast` from a byte
+  array to a `@Vector` compiles to scalar shifts, and loading through an
+  `*align(1) const @Vector` pointer does not; specializing `elementReadFloat` gained only
+  when inlined.
+- Step 8 (release): not started; it waits for the author's approval of the left-out list
+  and the review of the branch.
 
-Next steps, in order: on `review/perf-and-skeptic`, a fresh skeptic's review; fixes with
-tests that fail before them; the oracle's `OutOfBounds` gap above; the test suite and a
-three-round benchmark again; README, `doc/BENCHMARKS.md` and this file updated with the new
-numbers.
+Next steps: the author reviews `review/perf-and-skeptic` and the open points; then merge,
+tag `v0.1.0`, and the release notes.
 
 ## Tests
 
@@ -107,10 +111,11 @@ The tests the tables name, by short name:
 | validation | `edges: validation of views, meshes, nodes and animations gives the original's results` |
 | buffers | `edges: buffers from data URIs, files and the BIN chunk load as the original's` |
 | files | `edges: files beside the glTF load as the original's` |
-| decoding | `decoding: escapes and percent signs decode as the original decodes them`, and its fuzz test |
+| decoding | the three `decoding:` tests in `test/functions_test.zig` |
 | base64 | `base64: fuzz: random texts decode as the original decodes them` |
 | sizes | `sizes: components, component sizes and element sizes match for every type` |
-| fuzz | both `fuzz:` tests in `test/documents_fuzz_test.zig` |
+| fuzz | the `fuzz:` tests of mutations and documents in `test/documents_fuzz_test.zig` |
+| layouts | `fuzz: random accessor layouts over one buffer give the original's results` |
 | refusals | the `refusal:` tests in `test/refusals_test.zig` |
 | allocation | `a failed allocation at any point of parsing and loading a model leaks nothing` |
 | reader | `a file reader of the caller's reads the file and the buffers, and releases them` |
@@ -140,7 +145,7 @@ The tests the tables name, by short name:
 | --- | --- | --- | --- |
 | `cgltf_load_buffers` (files, data URIs, GLB chunk) | `loadBuffers` | samples, buffers, files, fuzz | oracle-tested |
 | `cgltf_load_buffer_base64` | `loadBufferBase64` | base64, buffers | benchmarked |
-| `cgltf_decode_string` | `decodeString` | decoding, strings, refusals | oracle-tested |
+| `cgltf_decode_string` | `decodeString` | decoding, refusals | oracle-tested |
 | `cgltf_decode_uri` | `decodeUri` | decoding, files | oracle-tested |
 | `cgltf_validate` | `validate` | validation, samples, fuzz, refusals | benchmarked |
 | `cgltf_copy_extras_json` (deprecated) | `copyExtrasJson` | samples, strings, refusals | oracle-tested |
@@ -149,13 +154,13 @@ The tests the tables name, by short name:
 
 | upstream | zig-cgltf | tests | state |
 | --- | --- | --- | --- |
-| `cgltf_accessor_read_float` | `readFloat` | accessors, samples, refusals | benchmarked |
-| `cgltf_accessor_read_uint` | `readUint` | accessors, samples, refusals | oracle-tested |
-| `cgltf_accessor_read_index` | `readIndex` | accessors, samples, refusals | benchmarked |
-| `cgltf_accessor_unpack_floats` | `unpackFloats` | accessors, sparse, samples, refusals | benchmarked |
-| `cgltf_accessor_unpack_indices` | `unpackIndices` | accessors, samples, refusals | benchmarked |
+| `cgltf_accessor_read_float` | `readFloat` | accessors, layouts, samples, refusals | benchmarked |
+| `cgltf_accessor_read_uint` | `readUint` | accessors, layouts, samples, refusals | oracle-tested |
+| `cgltf_accessor_read_index` | `readIndex` | accessors, layouts, samples, refusals | benchmarked |
+| `cgltf_accessor_unpack_floats` | `unpackFloats` | accessors, sparse, layouts, samples, refusals | benchmarked |
+| `cgltf_accessor_unpack_indices` | `unpackIndices` | accessors, layouts, samples, refusals | benchmarked |
 | sparse accessors (in the five above) | as upstream | sparse, fuzz, refusals | oracle-tested |
-| `cgltf_buffer_view_data` | `bufferViewData` | samples, fuzz, refusals | oracle-tested |
+| `cgltf_buffer_view_data` | `bufferViewData` | samples, layouts, fuzz, refusals | oracle-tested |
 | `cgltf_find_accessor` | `findAccessor` | samples, fuzz | oracle-tested |
 | `cgltf_num_components`, `cgltf_component_size`, `cgltf_calc_size` | `numComponents`, `componentSize`, `calcSize` | sizes | oracle-tested |
 | `cgltf_node_transform_local`, `cgltf_node_transform_world` | `transformLocal`, `transformWorld` | samples, fuzz, refusals | benchmarked |
