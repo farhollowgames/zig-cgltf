@@ -120,6 +120,7 @@ fn base64Zig(in: *const Inputs) u64 {
     var hash: u64 = 0;
     for (in.uris) |uri| {
         const data = cgltf.loadBufferBase64(gpa, uri.size, uri.text) catch continue;
+        std.mem.doNotOptimizeAway(data.ptr);
         if (data.len > 0) hash = mix(hash, data[data.len / 2]);
         gpa.free(data);
     }
@@ -133,6 +134,7 @@ fn base64Original(in: *const Inputs) u64 {
         var out: ?*anyopaque = null;
         if (c.cgltf_load_buffer_base64(&options, uri.size, uri.text.ptr, &out) != c.cgltf_result_success) continue;
         const data: [*]const u8 = @ptrCast(out.?);
+        std.mem.doNotOptimizeAway(data);
         if (uri.size > 0) hash = mix(hash, data[uri.size / 2]);
         std.c.free(out);
     }
@@ -195,6 +197,7 @@ fn readFloatZig(in: *const Inputs) u64 {
             for (0..accessor.count) |e| {
                 var out: [16]f32 = undefined;
                 const ok = cgltf.readFloat(gltf, accessor, e, &out) catch break;
+                std.mem.doNotOptimizeAway(&out);
                 if (ok) hash = mix(hash, @as(u32, @bitCast(out[0])));
             }
         }
@@ -209,7 +212,9 @@ fn readFloatOriginal(in: *const Inputs) u64 {
         for (data.accessors[0..data.accessors_count]) |*accessor| {
             for (0..accessor.count) |e| {
                 var out: [16]f32 = undefined;
-                if (c.cgltf_accessor_read_float(accessor, e, &out, 16) != 0) {
+                const ok = c.cgltf_accessor_read_float(accessor, e, &out, 16) != 0;
+                std.mem.doNotOptimizeAway(&out);
+                if (ok) {
                     hash = mix(hash, @as(u32, @bitCast(out[0])));
                 }
             }
@@ -287,6 +292,7 @@ fn transformsZig(in: *const Inputs) u64 {
         const gltf = model.port orelse continue;
         for (0..gltf.nodes.len) |n| {
             const world = cgltf.transformWorld(gltf, @intCast(n)) catch continue;
+            std.mem.doNotOptimizeAway(&world);
             hash = mix(hash, @as(u32, @bitCast(world[12])));
         }
     }
@@ -300,6 +306,7 @@ fn transformsOriginal(in: *const Inputs) u64 {
         for (data.nodes[0..data.nodes_count]) |*node| {
             var world: [16]f32 = undefined;
             c.cgltf_node_transform_world(node, &world);
+            std.mem.doNotOptimizeAway(&world);
             hash = mix(hash, @as(u32, @bitCast(world[12])));
         }
     }
